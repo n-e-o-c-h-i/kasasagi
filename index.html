@@ -298,6 +298,9 @@ const THINK_LEVELS = {
   high:{label:"🌕 高", budget:16384},
   max:{label:"✨ 最高", budget:32768},
 };
+/* 新世代Claude（Fable 5 / Opus 4.7・4.8 / Sonnet 5系）はadaptive思考のみ対応。
+   旧来のenabled+budget_tokensを送ると400エラーになるため、自動でadaptiveに切り替える */
+const ADAPTIVE_ONLY = /fable|mythos|opus-4-[78]|sonnet-5/;
 const THEME_DEF = { bg:"#10162B", user:"#2E3A5F", ai:"#1A2138", accent:"#D6B36A", font:"system", fsize:15, radius:14 };
 const load = (k,d)=>{ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } };
 const save = (k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ alert("保存に失敗しました（容量不足かも）。安全バックアップを書き出して、古い会話やアイコンを削除してね。"); } };
@@ -663,6 +666,7 @@ async function callAnthropic(ch, msgs, hooks, img){
   if(!settings.anthropicKey) throw new Error("AnthropicのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
   const thinkOn = ch.think && ch.think !== "off";
+  const adaptive = ADAPTIVE_ONLY.test(ch.model);
   const apiMsgs = msgs.map((m,i)=>{
     if(i===msgs.length-1 && m.role==="user")
       /* 現在日時と画像はキャッシュ境界（cache_control）の後ろ＝キャッシュを壊さない位置 */
@@ -675,7 +679,7 @@ async function callAnthropic(ch, msgs, hooks, img){
   });
   const body = {
     model: ch.model,
-    max_tokens: thinkOn ? Math.max(ch.maxTokens, tl.budget+2048) : ch.maxTokens,
+    max_tokens: (thinkOn && !adaptive) ? Math.max(ch.maxTokens, tl.budget+2048) : ch.maxTokens,
     stream: true,
     messages: apiMsgs,
   };
@@ -684,7 +688,7 @@ async function callAnthropic(ch, msgs, hooks, img){
     body.system = parts.map(t=>({type:"text", text:t}));
     body.system[body.system.length-1].cache_control = cacheCtl();
   }
-  if(thinkOn) body.thinking = {type:"enabled", budget_tokens:tl.budget};
+  if(thinkOn) body.thinking = adaptive ? {type:"adaptive"} : {type:"enabled", budget_tokens:tl.budget};
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST", signal:aborter.signal,
     headers:{
