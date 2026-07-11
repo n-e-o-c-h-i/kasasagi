@@ -61,6 +61,7 @@ header::after{
 .msg.assistant{margin-right:auto; background:var(--bubbleAI); border-bottom-left-radius:5px}
 .msg.error{margin-right:auto; background:none; border:1px solid var(--error); color:var(--error); font-size:13px}
 .meta{font-size:10.5px; color:var(--dim); margin-top:7px; letter-spacing:.03em}
+.msgimg{display:block; max-width:150px; max-height:150px; border-radius:9px; margin-bottom:6px; border:1px solid var(--line)}
 .acts{margin-top:7px; display:flex; gap:6px; flex-wrap:wrap}
 .abtn{background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px; font-size:11.5px; padding:3px 10px; font-family:inherit}
 .thinking{margin:-2px 0 8px; font-size:12.5px; color:var(--dim)}
@@ -85,6 +86,7 @@ footer{flex:none; padding:8px 10px calc(env(safe-area-inset-bottom) + 8px); back
 .chip{display:flex; align-items:center; gap:6px; background:var(--surface2); border:1px solid var(--line);
   border-radius:9px; padding:3px 9px; font-size:12px; color:var(--dim)}
 .chip button{background:none; border:none; color:var(--dim); font-size:13px; padding:0}
+.chip img{width:22px; height:22px; border-radius:5px; object-fit:cover}
 #btnSend{
   flex:none; width:44px; height:40px; border:none; border-radius:12px;
   background:var(--gold); color:var(--goldInk); font-size:16px; font-weight:700;
@@ -152,7 +154,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
       <textarea id="input" rows="1" placeholder="ことばを渡す…"></textarea>
       <button id="btnSend">↑</button>
     </div>
-    <input type="file" id="attachFile" accept=".txt,text/plain" style="display:none">
+    <input type="file" id="attachFile" accept=".txt,text/plain,image/*" style="display:none">
   </footer>
 </div>
 
@@ -307,8 +309,10 @@ let streaming = false;
 let aborter = null;
 let editCharId = null;
 let editIcon = "";
-/* 添付ファイル（送信待ち）。将来 attachments:[{type,name,data}] の配列に拡張して画像対応する余地あり */
+/* 添付（送信待ち）：{kind:"txt", name, text} または {kind:"image", name, dataUrl, thumb} */
 let pendingAttach = null;
+/* 直近の画像本体：セッション内のみ保持（localStorageには保存しない）。同セッション内の再生成時に再送するため */
+let sessionImage = null;
 
 /* 既存データの穏やかな移行（壊さない） */
 settings.theme = Object.assign({}, THEME_DEF, settings.theme||{});
@@ -398,6 +402,9 @@ function msgHTML(m, i, msgs, ch){
   let inner = '<div class="msg '+m.role+'">';
   if(m.role==="assistant" && m.thinking){
     inner += '<details class="thinking"><summary>思考プロセス</summary><div class="tbody">'+esc(m.thinking)+'</div></details>';
+  }
+  if(m.attachments && m.attachments.length){
+    m.attachments.forEach(a=>{ if(a.thumb) inner += '<img class="msgimg" src="'+a.thumb+'" alt="'+esc(a.name||"画像")+'">'; });
   }
   inner += '<span class="body">'+esc(m.content)+'</span>';
   const meta = m.role==="assistant" ? metaLine(m) : "";
@@ -498,6 +505,33 @@ function showIconPrev(){
   if(editIcon){ img.src = editIcon; img.style.display = ""; }
   else { img.removeAttribute("src"); img.style.display = "none"; }
 }
+function compressImage(file){
+  const r = new FileReader();
+  r.onload = ()=>{
+    const img = new Image();
+    img.onload = ()=>{
+      /* 送信用：長辺1280pxに縮小してJPEG化（HEIC等も自動でJPEGに変換される） */
+      const MAX = 1280;
+      const s = Math.min(1, MAX / Math.max(img.width, img.height));
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(img.width*s));
+      cv.height = Math.max(1, Math.round(img.height*s));
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      const dataUrl = cv.toDataURL("image/jpeg", 0.82);
+      /* 履歴・バックアップ用：96pxサムネイル（1枚5KB前後なので容量を圧迫しない） */
+      const T = 96, ts = Math.min(1, T / Math.max(img.width, img.height));
+      const tc = document.createElement("canvas");
+      tc.width = Math.max(1, Math.round(img.width*ts));
+      tc.height = Math.max(1, Math.round(img.height*ts));
+      tc.getContext("2d").drawImage(img, 0, 0, tc.width, tc.height);
+      pendingAttach = {kind:"image", name:file.name, dataUrl:dataUrl, thumb:tc.toDataURL("image/jpeg", 0.7)};
+      renderAttach();
+    };
+    img.onerror = ()=>alert("画像を読み込めなかった…別の画像で試してみて。");
+    img.src = r.result;
+  };
+  r.readAsDataURL(file);
+}
 function compressIcon(file){
   const r = new FileReader();
   r.onload = ()=>{
@@ -592,6 +626,7 @@ function friendlyError(status, raw, ch){
   const dash = ch.provider==="openrouter" ? "OpenRouter" : "Anthropic";
   if(status===401||status===403) return "APIキーが無効か、権限がないみたい。⚙︎ 設定で"+dash+"のキーを確認してね。";
   if(status===404 || /model.*not.*found|not_found/.test(r)) return "モデルID「"+ch.model+"」が見つからないよ。綴りを確認してね。"+(ch.provider==="openrouter"?"OpenRouterのサイトから正確なIDをコピーするのが確実。":"");
+  if(/image|vision|multimodal/.test(r) && /support|unsupported|invalid|not.*avail|cannot|unable/.test(r)) return "このモデルは画像添付に対応していません。画像なしで送るか、対応モデル（Claude系・GPT系・Gemini系など）に切り替えてね。";
   if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」にすると通るよ。";
   if(status===402 || /credit|balance|billing|insufficient|quota/.test(r)) return "残高が足りないみたい。"+dash+"のダッシュボードでクレジットを確認してね。";
   if(/prompt is too long|context|too long|maximum.*tokens|exceed/.test(r)) return "会話＋ナレッジが長すぎて上限を超えたみたい。新しい会話を始めるか、ナレッジを短くしてみて。";
@@ -622,15 +657,16 @@ function systemParts(ch){
   return parts;
 }
 
-async function callAnthropic(ch, msgs, hooks){
+async function callAnthropic(ch, msgs, hooks, img){
   if(!settings.anthropicKey) throw new Error("AnthropicのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
   const thinkOn = ch.think && ch.think !== "off";
   const apiMsgs = msgs.map((m,i)=>{
     if(i===msgs.length-1 && m.role==="user")
-      /* 現在日時はキャッシュ境界（cache_control）の後ろ＝キャッシュを壊さない位置 */
+      /* 現在日時と画像はキャッシュ境界（cache_control）の後ろ＝キャッシュを壊さない位置 */
       return {role:"user", content:[
         {type:"text", text:m.content, cache_control:cacheCtl()},
+        ...(img ? [{type:"image", source:{type:"base64", media_type:"image/jpeg", data:img.split(",")[1]}}] : []),
         {type:"text", text:nowStamp()}
       ]};
     return {role:m.role, content:m.content};
@@ -674,7 +710,7 @@ async function callAnthropic(ch, msgs, hooks){
   return usage;
 }
 
-async function callOpenRouter(ch, msgs, hooks){
+async function callOpenRouter(ch, msgs, hooks, img){
   if(!settings.openrouterKey) throw new Error("OpenRouterのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const isClaude = /claude|anthropic/i.test(ch.model);
   const apiMsgs = [];
@@ -687,8 +723,10 @@ async function callOpenRouter(ch, msgs, hooks){
   }
   msgs.forEach((m,i)=>{
     if(i===msgs.length-1 && m.role==="user"){
-      /* 現在日時は末尾ブロック＝DeepSeek等の自動プレフィックスキャッシュも壊さない */
-      const parts = [{type:"text", text:m.content}, {type:"text", text:nowStamp()}];
+      /* 現在日時と画像は末尾側＝DeepSeek等の自動プレフィックスキャッシュも壊さない */
+      const parts = [{type:"text", text:m.content}];
+      if(img) parts.push({type:"image_url", image_url:{url:img}});
+      parts.push({type:"text", text:nowStamp()});
       if(isClaude) parts[0].cache_control = cacheCtl();
       apiMsgs.push({role:"user", content:parts});
     } else apiMsgs.push({role:m.role, content:m.content});
@@ -722,21 +760,25 @@ async function send(){
   if(streaming){ if(aborter) aborter.abort(); return; }
   let text = $("input").value.trim();
   if(!text && !pendingAttach) return;
+  const msg = {role:"user", content:text};
   if(pendingAttach){
-    /* txt添付は本文の一部として送る＝どのモデルでも動く。
-       【将来の画像添付メモ】画像はここでcontentに混ぜず、m.attachmentsに
-       {type:"image", name, dataUrl} で持たせて、callAnthropic側で
-       {type:"image", source:{type:"base64", media_type, data}} ブロックに変換する。
-       画像は必ず縮小してから保存（compressIconと同じ要領）。localStorage容量に注意。
-       非対応モデルには「このモデルは画像/ファイル添付に対応していません」を出すこと。 */
-    text = (text ? text+"\n\n" : "") + "【添付ファイル: "+pendingAttach.name+"】\n"+pendingAttach.text;
+    if(pendingAttach.kind==="image"){
+      /* 画像本体はlocalStorageに保存しない（容量対策）。履歴にはサムネイルだけ残し、
+         本体はsessionImageに置いて送信時のみ使う */
+      msg.attachments = [{type:"image", name:pendingAttach.name, thumb:pendingAttach.thumb}];
+      sessionImage = {msg:msg, dataUrl:pendingAttach.dataUrl};
+    } else {
+      /* txt添付は本文の一部として送る＝どのモデルでも動く */
+      text = (text ? text+"\n\n" : "") + "【添付ファイル: "+pendingAttach.name+"】\n"+pendingAttach.text;
+      msg.content = text;
+    }
     pendingAttach = null; renderAttach();
   }
   let c = activeConvo();
   if(!c){ startWith(chars[0].id); c = activeConvo(); }
   $("input").value = ""; $("input").style.height = "auto";
-  c.messages.push({role:"user", content:text});
-  if(!c.title) c.title = text.slice(0, 28);
+  c.messages.push(msg);
+  if(!c.title) c.title = (msg.content||"").slice(0, 28) || "（画像）";
   await runAssistant(c);
 }
 async function regenerate(){
@@ -779,14 +821,16 @@ function fallbackCopy(text, ok){
 function renderAttach(){
   const el = $("attachRow");
   el.innerHTML = pendingAttach
-    ? '<div class="chip">📎 '+esc(pendingAttach.name)+'<button id="chipX" aria-label="添付を外す">✕</button></div>'
+    ? '<div class="chip">'+(pendingAttach.kind==="image"&&pendingAttach.thumb ? '<img src="'+pendingAttach.thumb+'" alt="">' : "📎 ")+esc(pendingAttach.name)+'<button id="chipX" aria-label="添付を外す">✕</button></div>'
     : "";
   const x = document.getElementById("chipX");
   if(x) x.onclick = ()=>{ pendingAttach=null; renderAttach(); };
 }
 async function runAssistant(c){
   const ch = charOf(c);
-  const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content}));
+  const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content || "（画像）"}));
+  const lastUser = c.messages[c.messages.length-1];
+  const img = (sessionImage && sessionImage.msg===lastUser) ? sessionImage.dataUrl : null;
   const am = {role:"assistant", content:"", thinking:"", model:ch.model, usage:null};
   c.messages.push(am);
   streaming = true; aborter = new AbortController();
@@ -807,7 +851,7 @@ async function runAssistant(c){
     onText:t=>{ am.content += t; bodySpan.textContent = am.content; think.open = false; stick(); },
   };
   try{
-    const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks) : await callAnthropic(ch, history, hooks);
+    const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
     am.usage = usage;
     if(!am.content && !am.thinking) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
   }catch(err){
@@ -924,9 +968,13 @@ $("btnSend").onclick = send;
 $("btnAttach").onclick = ()=>$("attachFile").click();
 $("attachFile").onchange = e=>{
   const f = e.target.files[0]; if(!f) return;
-  const r = new FileReader();
-  r.onload = ()=>{ pendingAttach = {name:f.name, text:r.result}; renderAttach(); };
-  r.readAsText(f);
+  if(f.type && f.type.startsWith("image/")){
+    compressImage(f);
+  } else {
+    const r = new FileReader();
+    r.onload = ()=>{ pendingAttach = {kind:"txt", name:f.name, text:r.result}; renderAttach(); };
+    r.readAsText(f);
+  }
   e.target.value = "";
 };
 $("input").addEventListener("input", function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,132)+"px"; });
