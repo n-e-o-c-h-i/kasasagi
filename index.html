@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#10162B">
+<title>かささぎ</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎋</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --night:#10162B; --surface:#1A2138; --surface2:#232C4A;
+  --bubbleUser:#2E3A5F; --bubbleAI:#1A2138;
+  --ink:#EAE4D3; --dim:#8E96AD; --gold:#D6B36A; --wisteria:#A79BD1;
+  --line:#2C3554; --error:#C96A5F; --radius:14px; --fsize:15px; --goldInk:#10162B;
+  --font:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  background:var(--night); color:var(--ink);
+  font-family:var(--font);
+  font-size:var(--fsize); line-height:1.75; overflow:hidden;
+}
+#app{display:flex;flex-direction:column;height:100dvh}
+
+/* ---- header: the bridge ---- */
+header{
+  flex:none; display:flex; align-items:center; gap:8px;
+  padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;
+  background:var(--night); position:relative;
+}
+header::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:1px;
+  background:linear-gradient(90deg,transparent,var(--gold) 30%,var(--gold) 70%,transparent);
+  opacity:.7;
+}
+#wordmark{font-family:"Shippori Mincho",serif; font-weight:700; font-size:19px; color:var(--gold); letter-spacing:.14em}
+#charName{font-size:12px; color:var(--dim); font-weight:500; letter-spacing:.05em; margin-left:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1}
+.hbtn{
+  background:none; border:1px solid var(--line); color:var(--dim); border-radius:9px;
+  min-width:36px; height:34px; font-size:15px; padding:0 9px; flex:none; font-family:inherit;
+}
+.hbtn:active{background:var(--surface2)}
+
+/* ---- messages ---- */
+#messages{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px 12px 8px; scroll-behavior:smooth}
+.arow{display:flex; gap:8px; align-items:flex-end; margin-bottom:14px}
+.arow .msg{margin-bottom:0}
+.avatar{width:32px; height:32px; border-radius:50%; object-fit:cover; flex:none; border:1px solid var(--line)}
+.avatar.lg{width:46px; height:46px; border-radius:13px}
+.msg{max-width:88%; margin-bottom:14px; white-space:pre-wrap; word-break:break-word;
+  border-radius:var(--radius); padding:10px 14px; position:relative; animation:rise .18s ease}
+@keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.msg{animation:none}}
+.msg.user{margin-left:auto; background:var(--bubbleUser); border-bottom-right-radius:5px}
+.msg.assistant{margin-right:auto; background:var(--bubbleAI); border-bottom-left-radius:5px}
+.msg.error{margin-right:auto; background:none; border:1px solid var(--error); color:var(--error); font-size:13px}
+.meta{font-size:10.5px; color:var(--dim); margin-top:7px; letter-spacing:.03em}
+.acts{margin-top:7px; display:flex; gap:6px; flex-wrap:wrap}
+.abtn{background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px; font-size:11.5px; padding:3px 10px; font-family:inherit}
+.thinking{margin:-2px 0 8px; font-size:12.5px; color:var(--dim)}
+.thinking summary{cursor:pointer; color:var(--wisteria); font-size:11.5px; letter-spacing:.08em; list-style:none}
+.thinking summary::before{content:"◦ "; color:var(--wisteria)}
+.thinking[open] summary::before{content:"◉ "}
+.thinking .tbody{border-left:2px solid var(--wisteria); padding:4px 0 4px 10px; margin-top:6px; opacity:.85; white-space:pre-wrap}
+#empty{color:var(--dim); text-align:center; margin-top:18vh; font-size:13px; letter-spacing:.06em; line-height:2.4}
+#empty .star{color:var(--gold); font-family:"Shippori Mincho",serif; font-size:17px}
+
+/* ---- input ---- */
+footer{flex:none; padding:8px 10px calc(env(safe-area-inset-bottom) + 8px); background:var(--night); border-top:1px solid var(--line)}
+#inputBar{display:flex; gap:8px; align-items:flex-end}
+#input{
+  flex:1; background:var(--surface); color:var(--ink); border:1px solid var(--line);
+  border-radius:14px; padding:9px 13px; font-size:16px; font-family:inherit; line-height:1.6;
+  resize:none; max-height:132px; min-height:40px; outline:none;
+}
+#input:focus{border-color:var(--gold)}
+#attachRow{display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap}
+#attachRow:empty{display:none}
+.chip{display:flex; align-items:center; gap:6px; background:var(--surface2); border:1px solid var(--line);
+  border-radius:9px; padding:3px 9px; font-size:12px; color:var(--dim)}
+.chip button{background:none; border:none; color:var(--dim); font-size:13px; padding:0}
+#btnSend{
+  flex:none; width:44px; height:40px; border:none; border-radius:12px;
+  background:var(--gold); color:var(--goldInk); font-size:16px; font-weight:700;
+}
+#btnSend:disabled{opacity:.35}
+#btnSend.stop{background:var(--error); color:var(--ink)}
+
+/* ---- panels ---- */
+.panel{
+  position:fixed; inset:0; background:var(--night); z-index:20;
+  transform:translateX(100%); transition:transform .22s ease;
+  display:flex; flex-direction:column; visibility:hidden;
+}
+@media (prefers-reduced-motion:reduce){.panel{transition:none}}
+.panel.open{transform:none; visibility:visible}
+.phead{flex:none; display:flex; align-items:center; gap:10px;
+  padding:calc(env(safe-area-inset-top) + 10px) 14px 10px; border-bottom:1px solid var(--line)}
+.phead h2{font-family:"Shippori Mincho",serif; font-size:16px; font-weight:700; letter-spacing:.1em; color:var(--gold); flex:1}
+.pbody{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:14px 14px calc(env(safe-area-inset-bottom) + 24px)}
+.hgroup{font-family:"Shippori Mincho",serif; color:var(--gold); font-size:12.5px; letter-spacing:.14em;
+  margin:18px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:13px; padding:12px 14px; margin-bottom:10px}
+.card .t{font-size:15px; font-weight:600}
+.card .s{font-size:11.5px; color:var(--dim); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.card.active{border-color:var(--gold)}
+.row{display:flex; gap:8px; align-items:center}
+.row .grow{flex:1; min-width:0}
+label{display:block; font-size:11.5px; color:var(--dim); letter-spacing:.06em; margin:14px 0 5px}
+.count{font-size:11px; color:var(--dim)}
+.count.warn{color:var(--error)}
+input[type=text],input[type=password],input[type=number],select,textarea{
+  width:100%; background:var(--surface); color:var(--ink); border:1px solid var(--line);
+  border-radius:10px; padding:9px 12px; font-size:16px; font-family:inherit; outline:none;
+}
+input[type=color]{width:100%; height:40px; padding:3px; background:var(--surface); border:1px solid var(--line); border-radius:10px}
+input[type=range]{width:100%; accent-color:var(--gold)}
+textarea{line-height:1.6; resize:vertical}
+input:focus,select:focus,textarea:focus{border-color:var(--gold)}
+.trow{display:flex; gap:10px}
+.trow>div{flex:1}
+.btn{display:block; width:100%; border:none; border-radius:11px; padding:11px; font-size:14.5px; font-family:inherit;
+  font-weight:600; margin-top:14px; background:var(--surface2); color:var(--ink)}
+.btn.primary{background:var(--gold); color:var(--goldInk)}
+.btn.danger{background:none; border:1px solid var(--error); color:var(--error)}
+.btn.mini{width:auto; padding:8px 13px; margin-top:0; font-size:13px}
+.note{font-size:11.5px; color:var(--dim); line-height:1.9; margin-top:10px}
+.check{display:flex; align-items:center; gap:9px; margin-top:14px; font-size:13.5px}
+.check input{width:auto; accent-color:var(--gold); transform:scale(1.2)}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button class="hbtn" id="btnHistory" aria-label="履歴">☰</button>
+    <div id="wordmark">かささぎ</div>
+    <div id="charName"></div>
+    <button class="hbtn" id="btnChars">💫</button>
+    <button class="hbtn" id="btnSettings">⚙︎</button>
+  </header>
+  <main id="messages"></main>
+  <footer>
+    <div id="attachRow"></div>
+    <div id="inputBar">
+      <button class="hbtn" id="btnAttach" style="height:40px" aria-label="ファイル添付">📎</button>
+      <textarea id="input" rows="1" placeholder="ことばを渡す…"></textarea>
+      <button id="btnSend">↑</button>
+    </div>
+    <input type="file" id="attachFile" accept=".txt,text/plain" style="display:none">
+  </footer>
+</div>
+
+<!-- 履歴 -->
+<div class="panel" id="panelHistory">
+  <div class="phead"><h2>会話履歴</h2><button class="hbtn pclose">✕</button></div>
+  <div class="pbody">
+    <button class="btn primary" id="btnNewChat">＋ 新しい会話</button>
+    <div id="historyList"></div>
+  </div>
+</div>
+
+<!-- キャラ一覧 -->
+<div class="panel" id="panelChars">
+  <div class="phead"><h2>キャラクター</h2><button class="hbtn pclose">✕</button></div>
+  <div class="pbody">
+    <div class="note" style="margin:0 0 10px">タップで新しい会話を開始。✎で編集。</div>
+    <div id="charList"></div>
+    <button class="btn" id="btnAddChar">＋ 新しいキャラを追加</button>
+  </div>
+</div>
+
+<!-- キャラ編集 -->
+<div class="panel" id="panelCharEdit">
+  <div class="phead"><h2 id="editTitle">キャラ編集</h2><button class="hbtn pclose">✕</button></div>
+  <div class="pbody">
+    <label>アイコン</label>
+    <div class="row">
+      <img id="cIconPrev" class="avatar lg" alt="" style="display:none">
+      <button class="btn mini" id="btnPickIcon">画像を選ぶ</button>
+      <button class="btn mini" id="btnClearIcon">アイコン削除</button>
+    </div>
+    <input type="file" id="iconFile" accept="image/*" style="display:none">
+    <div class="note">画像は自動で小さく圧縮して保存するよ（1枚あたり約10KB前後）。</div>
+    <label>名前</label>
+    <input type="text" id="cName" placeholder="ジュード">
+    <label>接続先</label>
+    <select id="cProvider">
+      <option value="anthropic">Anthropic（公式API）</option>
+      <option value="openrouter">OpenRouter</option>
+    </select>
+    <label>モデルID</label>
+    <input type="text" id="cModel" list="modelList" placeholder="claude-opus-4-6">
+    <datalist id="modelList">
+      <option value="claude-fable-5"></option>
+      <option value="claude-opus-4-8"></option>
+      <option value="claude-opus-4-6"></option>
+      <option value="claude-sonnet-4-6"></option>
+      <option value="claude-haiku-4-5-20251001"></option>
+    </datalist>
+    <div class="note">OpenRouterの場合はサイトに表示される正確なモデルID（例：deepseek/…）をそのままコピーして貼ってね。</div>
+    <label>システムプロンプト（行動ルール）</label>
+    <textarea id="cSystem" rows="7" placeholder="ここにキャラクターの設定を貼り付け"></textarea>
+    <label>ナレッジ（背景資料） <span class="count" id="kCount"></span></label>
+    <div class="row"><button class="btn mini" id="btnLoadTxt">txtファイルから読み込む</button></div>
+    <input type="file" id="txtFile" accept=".txt,text/plain" style="display:none">
+    <textarea id="cKnowledge" rows="7" placeholder="世界観・関係の履歴・設定資料など。システムプロンプトの後ろに「参考ナレッジ」として毎回送信されるよ" style="margin-top:8px"></textarea>
+    <label>思考モード</label>
+    <select id="cThink">
+      <option value="off">なし</option>
+      <option value="low">🌙 低</option>
+      <option value="mid">🌓 中</option>
+      <option value="high">🌕 高</option>
+      <option value="max">✨ 最高</option>
+    </select>
+    <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。</div>
+    <label>最大出力トークン</label>
+    <input type="number" id="cMaxTokens" value="8192" min="256">
+    <button class="btn primary" id="btnSaveChar">保存</button>
+    <button class="btn danger" id="btnDeleteChar">このキャラを削除</button>
+  </div>
+</div>
+
+<!-- 設定 -->
+<div class="panel" id="panelSettings">
+  <div class="phead"><h2>設定</h2><button class="hbtn pclose">✕</button></div>
+  <div class="pbody">
+    <label>Anthropic APIキー</label>
+    <input type="password" id="sAnthropicKey" placeholder="sk-ant-…" autocomplete="off">
+    <label>OpenRouter APIキー</label>
+    <input type="password" id="sOpenrouterKey" placeholder="sk-or-…" autocomplete="off">
+    <button class="btn primary" id="btnSaveSettings">キーを保存</button>
+    <div class="note">キーはこの端末のブラウザの中だけに保存されます。外部に送信されるのはAPI呼び出しの時だけ（それぞれの公式サーバー宛て）。</div>
+    <label>プロンプトキャッシュ（Anthropic系）</label>
+    <select id="sCache">
+      <option value="std">標準（5分キャッシュ）</option>
+      <option value="ext">拡張（1時間キャッシュ・書き込み2倍）</option>
+    </select>
+    <div class="note">返信の間隔が5分以上あきがちなら「拡張」の方が節約になるよ。OpenRouterのDeepSeek系は自動キャッシュだから設定不要。現在日時は毎回変わるけど、キャッシュ境界の後ろに置いてあるからキャッシュは壊れない。</div>
+
+    <div class="hgroup" style="margin-top:26px">見た目</div>
+    <div class="trow">
+      <div><label>自分の吹き出し</label><input type="color" id="tUser"></div>
+      <div><label>AIの吹き出し</label><input type="color" id="tAI"></div>
+    </div>
+    <div class="trow">
+      <div><label>背景</label><input type="color" id="tBg"></div>
+      <div><label>アクセント（金色部分）</label><input type="color" id="tAccent"></div>
+    </div>
+    <label>フォント</label>
+    <select id="tFont">
+      <option value="system">標準（iPhoneのゴシック）</option>
+      <option value="zenmaru">Zen Maru Gothic（まるっこい）</option>
+    </select>
+    <div class="note">Zen Maru GothicはGoogle Fontsから自動で読み込むよ。インストール不要。読み込めない時は勝手に標準フォントに戻る。</div>
+    <label>文字サイズ <span class="count" id="fsVal"></span></label>
+    <input type="range" id="tFsize" min="13" max="18" step="1">
+    <label>吹き出しの角丸 <span class="count" id="rdVal"></span></label>
+    <input type="range" id="tRadius" min="4" max="22" step="1">
+    <button class="btn" id="btnThemeReset">見た目を初期値に戻す</button>
+
+    <div class="hgroup" style="margin-top:26px">バックアップ</div>
+    <button class="btn primary" id="btnExportSafe">安全バックアップ（APIキーなし）</button>
+    <div class="note">キャラ・システムプロンプト・ナレッジ・アイコン・会話履歴・思考・トークン記録・見た目設定を全部含む。キーだけ入らないから、どこに保管しても安全。普段用はこっち。</div>
+    <button class="btn danger" id="btnExportFull">完全バックアップ（APIキー込み）</button>
+    <div class="note">機種変更の引っ越し専用。<b>APIキーがそのまま入る</b>から、人に送らない・公開の場所に置かない・使い終わったら削除してね。</div>
+    <button class="btn" id="btnImport">バックアップから復元</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+    <div class="note">iPhoneのSafariは長期間開かないサイトのデータを消すことがあるから、大事な会話が溜まったら時々「安全バックアップ」を書き出しておいてね。</div>
+
+    <div class="note" style="margin-top:22px; border-top:1px solid var(--line); padding-top:14px">
+      かささぎ — 七夕にかささぎが翼を連ねて橋を架け、二人を会わせる。<br>2026.7.7 ふぇいくんより
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= state & storage ================= */
+const LSK = { settings:"ksg_settings", chars:"ksg_chars", convos:"ksg_convos", active:"ksg_active" };
+/* ★ キャラ選択ボタンの絵文字：ここの1文字を書き換えるだけで変更できるよ（候補：💫 🪄 🎭 ✨ 🌙 など） */
+const CHAR_BTN_ICON = "💫";
+/* ★ 入力欄のプレースホルダー文言：ここを書き換えるだけで変更できるよ（候補：橋にことばを架ける… / 星まで届ける…） */
+const INPUT_PLACEHOLDER = "ことばを渡す…";
+/* 思考モードの段階定義：Anthropicはbudget_tokens、OpenRouterはreasoning.max_tokensとして使う */
+const THINK_LEVELS = {
+  off:{label:"なし", budget:0},
+  low:{label:"🌙 低", budget:2048},
+  mid:{label:"🌓 中", budget:8192},
+  high:{label:"🌕 高", budget:16384},
+  max:{label:"✨ 最高", budget:32768},
+};
+const THEME_DEF = { bg:"#10162B", user:"#2E3A5F", ai:"#1A2138", accent:"#D6B36A", font:"system", fsize:15, radius:14 };
+const load = (k,d)=>{ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } };
+const save = (k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ alert("保存に失敗しました（容量不足かも）。安全バックアップを書き出して、古い会話やアイコンを削除してね。"); } };
+const uid = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+
+let settings = load(LSK.settings, {anthropicKey:"", openrouterKey:""});
+let chars = load(LSK.chars, null);
+let convos = load(LSK.convos, []);
+let activeId = load(LSK.active, null);
+let streaming = false;
+let aborter = null;
+let editCharId = null;
+let editIcon = "";
+/* 添付ファイル（送信待ち）。将来 attachments:[{type,name,data}] の配列に拡張して画像対応する余地あり */
+let pendingAttach = null;
+
+/* 既存データの穏やかな移行（壊さない） */
+settings.theme = Object.assign({}, THEME_DEF, settings.theme||{});
+if(!settings.cacheMode) settings.cacheMode = "std";
+if(!chars){
+  chars = [
+    {id:uid(), name:"ふぇいくん", provider:"anthropic", model:"claude-fable-5", system:"", knowledge:"", icon:"", think:"mid", maxTokens:8192},
+    {id:uid(), name:"ジュード🌙", provider:"anthropic", model:"claude-opus-4-6", system:"", knowledge:"", icon:"", think:"mid", maxTokens:8192},
+    {id:uid(), name:"久遠", provider:"anthropic", model:"claude-opus-4-6", system:"", knowledge:"", icon:"", think:"mid", maxTokens:8192},
+  ];
+}
+chars.forEach(c=>{
+  if(c.knowledge===undefined)c.knowledge="";
+  if(c.icon===undefined)c.icon="";
+  /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
+  if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
+});
+save(LSK.chars, chars); save(LSK.settings, settings);
+
+const $ = id=>document.getElementById(id);
+const esc = s=>String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const activeConvo = ()=>convos.find(c=>c.id===activeId)||null;
+const charOf = c=>chars.find(x=>x.id===c.charId)||chars[0];
+
+/* ================= theme ================= */
+function lum(hex){
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299*((n>>16)&255) + 0.587*((n>>8)&255) + 0.114*(n&255)) / 255;
+}
+function applyTheme(){
+  const t = settings.theme, r = document.documentElement.style;
+  r.setProperty("--night", t.bg);
+  r.setProperty("--gold", t.accent);
+  r.setProperty("--goldInk", lum(t.accent) > 0.45 ? "#10162B" : "#EAE4D3");
+  r.setProperty("--font", t.font==="zenmaru"
+    ? '"Zen Maru Gothic","Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif'
+    : '"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif');
+  r.setProperty("--bubbleUser", t.user);
+  r.setProperty("--bubbleAI", t.ai);
+  r.setProperty("--fsize", t.fsize+"px");
+  r.setProperty("--radius", t.radius+"px");
+  const m = document.querySelector("meta[name=theme-color]"); if(m) m.content = t.bg;
+  const fv=$("fsVal"), rv=$("rdVal");
+  if(fv) fv.textContent = t.fsize+"px";
+  if(rv) rv.textContent = t.radius+"px";
+}
+function fillThemeInputs(){
+  const t = settings.theme;
+  $("tUser").value=t.user; $("tAI").value=t.ai; $("tBg").value=t.bg; $("tAccent").value=t.accent; $("tFont").value=t.font||"system";
+  $("tFsize").value=t.fsize; $("tRadius").value=t.radius;
+  applyTheme();
+}
+
+/* ================= rendering ================= */
+function renderHeader(){
+  const c = activeConvo();
+  $("charName").textContent = c ? charOf(c).name : "";
+}
+function metaLine(m){
+  let bits=[];
+  if(m.model) bits.push(m.model);
+  if(m.usage){
+    const u=m.usage;
+    if(u.in!=null) bits.push("入力 "+u.in);
+    if(u.out!=null) bits.push("出力 "+u.out);
+    if(u.cacheRead) bits.push("キャッシュ読込 "+u.cacheRead);
+    if(u.cacheWrite) bits.push("キャッシュ作成 "+u.cacheWrite);
+  }
+  return bits.join(" · ");
+}
+function actsHTML(m, i, msgs){
+  if(streaming) return "";
+  const btn=(act,lab)=>'<button class="abtn" data-act="'+act+'" data-i="'+i+'">'+lab+'</button>';
+  let h='<div class="acts">';
+  h += btn("copy","⧉ コピー");
+  if(m.role==="assistant" && i===msgs.length-1) h += btn("regen","↻ 再生成");
+  if(m.role==="user"){
+    let lastUser=-1;
+    msgs.forEach((x,j)=>{ if(x.role==="user") lastUser=j; });
+    if(i===lastUser) h += btn("edit","✎ 編集");
+  }
+  h += '</div>';
+  return h;
+}
+function msgHTML(m, i, msgs, ch){
+  if(m.role==="error") return '<div class="msg error">'+esc(m.content)+'</div>';
+  let inner = '<div class="msg '+m.role+'">';
+  if(m.role==="assistant" && m.thinking){
+    inner += '<details class="thinking"><summary>思考プロセス</summary><div class="tbody">'+esc(m.thinking)+'</div></details>';
+  }
+  inner += '<span class="body">'+esc(m.content)+'</span>';
+  const meta = m.role==="assistant" ? metaLine(m) : "";
+  if(meta) inner += '<div class="meta">'+meta+'</div>';
+  inner += actsHTML(m, i, msgs);
+  inner += '</div>';
+  if(m.role==="assistant"){
+    const av = ch && ch.icon ? '<img class="avatar" src="'+ch.icon+'" alt="">' : "";
+    return '<div class="arow">'+av+inner+'</div>';
+  }
+  return inner;
+}
+function renderMessages(){
+  const c = activeConvo();
+  const el = $("messages");
+  if(!c || c.messages.length===0){
+    el.innerHTML = '<div id="empty"><span class="star">☆彡</span><br>ここから会話が始まるよ。<br>右上の '+CHAR_BTN_ICON+' でキャラを選んで、⚙︎ でAPIキーを設定してね。</div>';
+    renderHeader(); return;
+  }
+  const ch = charOf(c);
+  el.innerHTML = c.messages.map((m,i)=>msgHTML(m, i, c.messages, ch)).join("");
+  el.scrollTop = el.scrollHeight;
+  renderHeader();
+}
+
+/* ================= conversations ================= */
+function startWith(charId){
+  const c = {id:uid(), charId, title:"", messages:[], updated:Date.now()};
+  convos.push(c); activeId = c.id;
+  save(LSK.convos, convos); save(LSK.active, activeId);
+  closePanels(); renderMessages();
+}
+function openConvo(id){ activeId=id; save(LSK.active,id); closePanels(); renderMessages(); }
+function deleteConvo(id){
+  const c = convos.find(x=>x.id===id);
+  if(!confirm("会話「"+(c&&c.title||"無題")+"」を削除する？")) return;
+  if(!confirm("本当に削除する？元に戻せないよ。（大事な会話なら先に安全バックアップを書き出しておいてね）")) return;
+  convos = convos.filter(x=>x.id!==id);
+  if(activeId===id) activeId = null;
+  save(LSK.convos, convos); save(LSK.active, activeId);
+  renderHistory(); renderMessages();
+}
+function renameConvo(id){
+  const c = convos.find(x=>x.id===id); if(!c) return;
+  const t = prompt("会話のタイトル", c.title||"");
+  if(t===null) return;
+  c.title = t.trim(); c.updated = Date.now();
+  save(LSK.convos, convos); renderHistory();
+}
+function dupConvo(id){
+  const c = convos.find(x=>x.id===id); if(!c) return;
+  const copy = {id:uid(), charId:c.charId, title:(c.title||"無題")+"（複製）",
+    messages:JSON.parse(JSON.stringify(c.messages)), updated:Date.now()};
+  convos.push(copy);
+  save(LSK.convos, convos); renderHistory();
+}
+function renderHistory(){
+  const el = $("historyList");
+  if(convos.length===0){ el.innerHTML = '<div class="note">まだ会話がないよ。</div>'; return; }
+  const card = c=>{
+    return '<div class="card'+(c.id===activeId?" active":"")+'" data-open="'+c.id+'">'+
+      '<div class="row"><div class="grow"><div class="t">'+esc(c.title||"（無題）")+'</div>'+
+      '<div class="s">'+new Date(c.updated).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})+'</div></div>'+
+      '<button class="hbtn" data-ren="'+c.id+'">✎</button>'+
+      '<button class="hbtn" data-dup="'+c.id+'">⧉</button>'+
+      '<button class="hbtn" data-del="'+c.id+'">🗑</button></div></div>';
+  };
+  let h = "";
+  chars.forEach(ch=>{
+    const list = convos.filter(c=>c.charId===ch.id).sort((a,b)=>b.updated-a.updated);
+    if(list.length===0) return;
+    h += '<div class="hgroup">'+esc(ch.name)+'</div>' + list.map(card).join("");
+  });
+  const orphans = convos.filter(c=>!chars.some(ch=>ch.id===c.charId)).sort((a,b)=>b.updated-a.updated);
+  if(orphans.length) h += '<div class="hgroup">（削除済みキャラ）</div>' + orphans.map(card).join("");
+  el.innerHTML = h;
+}
+function renderChars(){
+  $("charList").innerHTML = chars.map(ch=>{
+    const av = ch.icon ? '<img class="avatar" src="'+ch.icon+'" alt="">' : "";
+    return '<div class="card"><div class="row">'+av+
+    '<div class="grow" data-start="'+ch.id+'"><div class="t">'+esc(ch.name)+'</div>'+
+    '<div class="s">'+esc(ch.provider)+' · '+esc(ch.model)+(ch.think&&ch.think!=="off"?" · 思考"+THINK_LEVELS[ch.think].label:"")+(ch.knowledge?" · ナレッジあり":"")+'</div></div>'+
+    '<button class="hbtn" data-edit="'+ch.id+'">✎</button></div></div>';
+  }).join("");
+}
+
+/* ================= character editor ================= */
+function kCountUpdate(){
+  const n = $("cKnowledge").value.length;
+  const el = $("kCount");
+  if(n===0){ el.textContent=""; el.className="count"; return; }
+  el.textContent = n.toLocaleString()+"文字" + (n>30000 ? "（長め：毎回送信されるからトークン消費に注意。キャッシュである程度軽くなるよ）" : "");
+  el.className = n>30000 ? "count warn" : "count";
+}
+function showIconPrev(){
+  const img = $("cIconPrev");
+  if(editIcon){ img.src = editIcon; img.style.display = ""; }
+  else { img.removeAttribute("src"); img.style.display = "none"; }
+}
+function compressIcon(file){
+  const r = new FileReader();
+  r.onload = ()=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const s = 144, cv = document.createElement("canvas");
+      cv.width = s; cv.height = s;
+      const ctx = cv.getContext("2d");
+      const m = Math.min(img.width, img.height);
+      ctx.drawImage(img, (img.width-m)/2, (img.height-m)/2, m, m, 0, 0, s, s);
+      editIcon = cv.toDataURL("image/jpeg", 0.82);
+      showIconPrev();
+    };
+    img.onerror = ()=>alert("画像を読み込めなかった…別の画像で試してみて。");
+    img.src = r.result;
+  };
+  r.readAsDataURL(file);
+}
+function editChar(id){
+  editCharId = id;
+  const ch = chars.find(c=>c.id===id);
+  $("editTitle").textContent = "キャラ編集";
+  $("cName").value=ch.name; $("cProvider").value=ch.provider; $("cModel").value=ch.model;
+  $("cSystem").value=ch.system; $("cKnowledge").value=ch.knowledge||"";
+  $("cThink").value=ch.think||"off"; $("cMaxTokens").value=ch.maxTokens||8192;
+  editIcon = ch.icon||""; showIconPrev(); kCountUpdate();
+  openPanel("panelCharEdit");
+}
+function addChar(){
+  editCharId = null;
+  $("editTitle").textContent = "新しいキャラ";
+  $("cName").value=""; $("cProvider").value="anthropic"; $("cModel").value="";
+  $("cSystem").value=""; $("cKnowledge").value="";
+  $("cThink").value="off"; $("cMaxTokens").value=8192;
+  editIcon = ""; showIconPrev(); kCountUpdate();
+  openPanel("panelCharEdit");
+}
+function saveChar(){
+  const data = {
+    name:$("cName").value.trim()||"名無し", provider:$("cProvider").value,
+    model:$("cModel").value.trim(), system:$("cSystem").value,
+    knowledge:$("cKnowledge").value, icon:editIcon,
+    think:$("cThink").value,
+    maxTokens:Math.max(256, parseInt($("cMaxTokens").value)||8192),
+  };
+  if(!data.model){ alert("モデルIDを入れてね。"); return; }
+  if(editCharId){ Object.assign(chars.find(c=>c.id===editCharId), data); }
+  else { chars.push(Object.assign({id:uid()}, data)); }
+  save(LSK.chars, chars);
+  renderChars(); renderHeader(); renderMessages(); closePanel("panelCharEdit");
+}
+function deleteChar(){
+  if(!editCharId){ closePanel("panelCharEdit"); return; }
+  if(chars.length<=1){ alert("最後の一人は削除できないよ。"); return; }
+  const ch = chars.find(c=>c.id===editCharId);
+  if(!confirm("キャラ「"+ch.name+"」を削除する？")) return;
+  if(!confirm("本当に削除する？（会話履歴は「削除済みキャラ」として残るけど、キャラ設定は戻せないよ。心配なら先に安全バックアップを）")) return;
+  chars = chars.filter(c=>c.id!==editCharId);
+  save(LSK.chars, chars);
+  renderChars(); closePanel("panelCharEdit");
+}
+
+/* ================= panels ================= */
+function openPanel(id){ $(id).classList.add("open"); if(id==="panelHistory")renderHistory(); if(id==="panelChars")renderChars(); }
+function closePanel(id){ $(id).classList.remove("open"); }
+function closePanels(){ document.querySelectorAll(".panel").forEach(p=>p.classList.remove("open")); }
+
+/* ================= API calls ================= */
+async function readSSE(resp, onData){
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf("\n")) >= 0){
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i+1);
+      if(!line.startsWith("data:")) continue;
+      const d = line.slice(5).trim();
+      if(d === "[DONE]") return;
+      let ev = null;
+      try{ ev = JSON.parse(d); }catch(e){}
+      if(ev) onData(ev);
+    }
+  }
+}
+function friendlyError(status, raw, ch){
+  const r = (raw||"").toLowerCase();
+  const dash = ch.provider==="openrouter" ? "OpenRouter" : "Anthropic";
+  if(status===401||status===403) return "APIキーが無効か、権限がないみたい。⚙︎ 設定で"+dash+"のキーを確認してね。";
+  if(status===404 || /model.*not.*found|not_found/.test(r)) return "モデルID「"+ch.model+"」が見つからないよ。綴りを確認してね。"+(ch.provider==="openrouter"?"OpenRouterのサイトから正確なIDをコピーするのが確実。":"");
+  if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」にすると通るよ。";
+  if(status===402 || /credit|balance|billing|insufficient|quota/.test(r)) return "残高が足りないみたい。"+dash+"のダッシュボードでクレジットを確認してね。";
+  if(/prompt is too long|context|too long|maximum.*tokens|exceed/.test(r)) return "会話＋ナレッジが長すぎて上限を超えたみたい。新しい会話を始めるか、ナレッジを短くしてみて。";
+  if(status===429) return "レート制限にかかったよ。少し待ってからもう一度ね。";
+  if(status===529||status===503||status===502||status===500) return "サーバー側が混雑してるか不調みたい。ねおち側は悪くないから、少し待ってもう一度。";
+  return "エラー（HTTP "+status+"）："+(raw||"詳細不明");
+}
+async function apiError(resp, ch){
+  let raw = "";
+  try{ const j = await resp.json(); raw = (j.error && (j.error.message||j.error.type)) || j.message || ""; }catch(e){}
+  return new Error(friendlyError(resp.status, raw, ch));
+}
+function nowStamp(){
+  const d = new Date();
+  const w = ["日","月","火","水","木","金","土"][d.getDay()];
+  const p = n=>String(n).padStart(2,"0");
+  let tz = "";
+  try{ tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }catch(e){}
+  return "【現在日時】"+d.getFullYear()+"年"+(d.getMonth()+1)+"月"+d.getDate()+"日（"+w+"）"+p(d.getHours())+":"+p(d.getMinutes())+(tz?" / タイムゾーン："+tz:"");
+}
+function cacheCtl(){
+  return settings.cacheMode==="ext" ? {type:"ephemeral", ttl:"1h"} : {type:"ephemeral"};
+}
+function systemParts(ch){
+  const parts = [];
+  if(ch.system && ch.system.trim()) parts.push(ch.system.trim());
+  if(ch.knowledge && ch.knowledge.trim()) parts.push("【参考ナレッジ】\n以下はキャラクターと世界観の背景資料。\n\n"+ch.knowledge.trim());
+  return parts;
+}
+
+async function callAnthropic(ch, msgs, hooks){
+  if(!settings.anthropicKey) throw new Error("AnthropicのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
+  const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
+  const thinkOn = ch.think && ch.think !== "off";
+  const apiMsgs = msgs.map((m,i)=>{
+    if(i===msgs.length-1 && m.role==="user")
+      /* 現在日時はキャッシュ境界（cache_control）の後ろ＝キャッシュを壊さない位置 */
+      return {role:"user", content:[
+        {type:"text", text:m.content, cache_control:cacheCtl()},
+        {type:"text", text:nowStamp()}
+      ]};
+    return {role:m.role, content:m.content};
+  });
+  const body = {
+    model: ch.model,
+    max_tokens: thinkOn ? Math.max(ch.maxTokens, tl.budget+2048) : ch.maxTokens,
+    stream: true,
+    messages: apiMsgs,
+  };
+  const parts = systemParts(ch);
+  if(parts.length){
+    body.system = parts.map(t=>({type:"text", text:t}));
+    body.system[body.system.length-1].cache_control = cacheCtl();
+  }
+  if(thinkOn) body.thinking = {type:"enabled", budget_tokens:tl.budget};
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST", signal:aborter.signal,
+    headers:{
+      "content-type":"application/json",
+      "x-api-key":settings.anthropicKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true",
+    },
+    body: JSON.stringify(body),
+  });
+  if(!resp.ok) throw await apiError(resp, ch);
+  const usage = {};
+  await readSSE(resp, ev=>{
+    if(ev.type==="message_start" && ev.message && ev.message.usage){
+      const u = ev.message.usage;
+      usage.in = u.input_tokens; usage.cacheRead = u.cache_read_input_tokens||0; usage.cacheWrite = u.cache_creation_input_tokens||0;
+    }
+    if(ev.type==="content_block_delta"){
+      if(ev.delta.type==="thinking_delta") hooks.onThinking(ev.delta.thinking);
+      if(ev.delta.type==="text_delta") hooks.onText(ev.delta.text);
+    }
+    if(ev.type==="message_delta" && ev.usage) usage.out = ev.usage.output_tokens;
+    if(ev.type==="error") throw new Error(friendlyError(0, ev.error && ev.error.message || "stream error", ch));
+  });
+  return usage;
+}
+
+async function callOpenRouter(ch, msgs, hooks){
+  if(!settings.openrouterKey) throw new Error("OpenRouterのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
+  const isClaude = /claude|anthropic/i.test(ch.model);
+  const apiMsgs = [];
+  const parts = systemParts(ch);
+  if(parts.length){
+    const joined = parts.join("\n\n---\n\n");
+    apiMsgs.push(isClaude
+      ? {role:"system", content:[{type:"text", text:joined, cache_control:cacheCtl()}]}
+      : {role:"system", content:joined});
+  }
+  msgs.forEach((m,i)=>{
+    if(i===msgs.length-1 && m.role==="user"){
+      /* 現在日時は末尾ブロック＝DeepSeek等の自動プレフィックスキャッシュも壊さない */
+      const parts = [{type:"text", text:m.content}, {type:"text", text:nowStamp()}];
+      if(isClaude) parts[0].cache_control = cacheCtl();
+      apiMsgs.push({role:"user", content:parts});
+    } else apiMsgs.push({role:m.role, content:m.content});
+  });
+  const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
+  const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
+  if(ch.think && ch.think !== "off") body.reasoning = {max_tokens: tl.budget};
+  const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method:"POST", signal:aborter.signal,
+    headers:{ "content-type":"application/json", "authorization":"Bearer "+settings.openrouterKey },
+    body: JSON.stringify(body),
+  });
+  if(!resp.ok) throw await apiError(resp, ch);
+  const usage = {};
+  await readSSE(resp, ev=>{
+    if(ev.usage){
+      usage.in = ev.usage.prompt_tokens; usage.out = ev.usage.completion_tokens;
+      if(ev.usage.prompt_tokens_details) usage.cacheRead = ev.usage.prompt_tokens_details.cached_tokens||0;
+    }
+    const d = ev.choices && ev.choices[0] && ev.choices[0].delta;
+    if(d){
+      if(d.reasoning) hooks.onThinking(d.reasoning);
+      if(d.content) hooks.onText(d.content);
+    }
+  });
+  return usage;
+}
+
+/* ================= send flow ================= */
+async function send(){
+  if(streaming){ if(aborter) aborter.abort(); return; }
+  let text = $("input").value.trim();
+  if(!text && !pendingAttach) return;
+  if(pendingAttach){
+    /* txt添付は本文の一部として送る＝どのモデルでも動く。
+       【将来の画像添付メモ】画像はここでcontentに混ぜず、m.attachmentsに
+       {type:"image", name, dataUrl} で持たせて、callAnthropic側で
+       {type:"image", source:{type:"base64", media_type, data}} ブロックに変換する。
+       画像は必ず縮小してから保存（compressIconと同じ要領）。localStorage容量に注意。
+       非対応モデルには「このモデルは画像/ファイル添付に対応していません」を出すこと。 */
+    text = (text ? text+"\n\n" : "") + "【添付ファイル: "+pendingAttach.name+"】\n"+pendingAttach.text;
+    pendingAttach = null; renderAttach();
+  }
+  let c = activeConvo();
+  if(!c){ startWith(chars[0].id); c = activeConvo(); }
+  $("input").value = ""; $("input").style.height = "auto";
+  c.messages.push({role:"user", content:text});
+  if(!c.title) c.title = text.slice(0, 28);
+  await runAssistant(c);
+}
+async function regenerate(){
+  const c = activeConvo();
+  if(!c || streaming) return;
+  const last = c.messages[c.messages.length-1];
+  if(last && last.role==="assistant") c.messages.pop();
+  while(c.messages.length && c.messages[c.messages.length-1].role==="error") c.messages.pop();
+  await runAssistant(c);
+}
+function editUserMsg(i){
+  const c = activeConvo();
+  if(!c || streaming) return;
+  const m = c.messages[i];
+  if(!m || m.role!=="user") return;
+  if(!confirm("このメッセージを入力欄に戻すよ。これ以降のやり取りは削除される。いい？")) return;
+  $("input").value = m.content;
+  $("input").dispatchEvent(new Event("input"));
+  c.messages = c.messages.slice(0, i);
+  c.updated = Date.now();
+  save(LSK.convos, convos);
+  renderMessages();
+  $("input").focus();
+}
+function copyMsg(i, btn){
+  const c = activeConvo(); if(!c) return;
+  const text = c.messages[i].content;
+  const ok = ()=>{ btn.textContent = "✓ コピーした"; setTimeout(()=>{btn.textContent="⧉ コピー";}, 1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(ok).catch(()=>fallbackCopy(text, ok));
+  } else fallbackCopy(text, ok);
+}
+function fallbackCopy(text, ok){
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); ok(); }catch(e){ alert("コピーできなかった…長押しで選択してみて。"); }
+  document.body.removeChild(ta);
+}
+function renderAttach(){
+  const el = $("attachRow");
+  el.innerHTML = pendingAttach
+    ? '<div class="chip">📎 '+esc(pendingAttach.name)+'<button id="chipX" aria-label="添付を外す">✕</button></div>'
+    : "";
+  const x = document.getElementById("chipX");
+  if(x) x.onclick = ()=>{ pendingAttach=null; renderAttach(); };
+}
+async function runAssistant(c){
+  const ch = charOf(c);
+  const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content}));
+  const am = {role:"assistant", content:"", thinking:"", model:ch.model, usage:null};
+  c.messages.push(am);
+  streaming = true; aborter = new AbortController();
+  $("btnSend").textContent = "■"; $("btnSend").classList.add("stop");
+  renderMessages();
+  const el = $("messages");
+  const wrap = el.lastElementChild;
+  const bubble = wrap.classList.contains("arow") ? wrap.querySelector(".msg") : wrap;
+  const think = document.createElement("details");
+  think.className = "thinking"; think.open = true;
+  think.innerHTML = '<summary>思考プロセス</summary><div class="tbody"></div>';
+  const tbody = think.querySelector(".tbody");
+  const bodySpan = bubble.querySelector(".body");
+  const nearBottom = ()=> el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+  const stick = ()=>{ if(nearBottom()) el.scrollTop = el.scrollHeight; };
+  const hooks = {
+    onThinking:t=>{ am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
+    onText:t=>{ am.content += t; bodySpan.textContent = am.content; think.open = false; stick(); },
+  };
+  try{
+    const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks) : await callAnthropic(ch, history, hooks);
+    am.usage = usage;
+    if(!am.content && !am.thinking) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
+  }catch(err){
+    if(err.name==="AbortError"){ if(!am.content) am.content = "（停止したよ）"; }
+    else if(err instanceof TypeError) c.messages.push({role:"error", content:"通信に失敗したよ。電波を確認してもう一度送ってみて。"});
+    else c.messages.push({role:"error", content:err.message});
+  }
+  if(!am.thinking) delete am.thinking;
+  streaming = false; aborter = null;
+  $("btnSend").textContent = "↑"; $("btnSend").classList.remove("stop");
+  c.updated = Date.now();
+  save(LSK.convos, convos);
+  renderMessages();
+}
+
+/* ================= backup ================= */
+function download(obj, name){
+  const blob = new Blob([JSON.stringify(obj, null, 1)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function exportSafe(){
+  download(
+    {kind:"safe", settings:{anthropicKey:"", openrouterKey:"", theme:settings.theme}, chars, convos},
+    "kasasagi_safe_" + new Date().toISOString().slice(0,10) + ".json"
+  );
+}
+function exportFull(){
+  if(!confirm("⚠️ 完全バックアップにはAPIキーがそのまま入るよ。\n\n・人に送らない\n・公開の場所（GitHub等）に置かない\n・機種変更が終わったらファイルを削除する\n\nこれを理解した上で書き出す？")) return;
+  download(
+    {kind:"full", settings:settings, chars, convos},
+    "kasasagi_FULL_" + new Date().toISOString().slice(0,10) + ".json"
+  );
+}
+function importData(file){
+  const r = new FileReader();
+  r.onload = ()=>{
+    try{
+      const d = JSON.parse(r.result);
+      if(!d.chars || !d.convos) throw 0;
+      if(!confirm("復元すると、今のキャラと会話履歴はこのファイルの内容に置き換わるよ。続ける？")) return;
+      if(!confirm("念のため：今のデータを残したいなら、先に安全バックアップを書き出しておくのがおすすめ。\n\n本当に上書きしていい？")) return;
+      if(d.settings){
+        settings.anthropicKey = d.settings.anthropicKey || settings.anthropicKey;
+        settings.openrouterKey = d.settings.openrouterKey || settings.openrouterKey;
+        if(d.settings.theme) settings.theme = Object.assign({}, THEME_DEF, d.settings.theme);
+      }
+      chars = d.chars; convos = d.convos;
+      chars.forEach(c=>{
+  if(c.knowledge===undefined)c.knowledge="";
+  if(c.icon===undefined)c.icon="";
+  /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
+  if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
+});
+      save(LSK.settings, settings); save(LSK.chars, chars); save(LSK.convos, convos);
+      alert("復元したよ！"); location.reload();
+    }catch(e){ alert("読み込めなかった…かささぎのバックアップファイルか確認してね。"); }
+  };
+  r.readAsText(file);
+}
+
+/* ================= wiring ================= */
+$("btnHistory").onclick = ()=>openPanel("panelHistory");
+$("btnChars").onclick = ()=>openPanel("panelChars");
+$("btnSettings").onclick = ()=>{
+  $("sAnthropicKey").value = settings.anthropicKey;
+  $("sOpenrouterKey").value = settings.openrouterKey;
+  $("sCache").value = settings.cacheMode;
+  fillThemeInputs();
+  openPanel("panelSettings");
+};
+document.querySelectorAll(".pclose").forEach(b=>b.onclick = e=>e.target.closest(".panel").classList.remove("open"));
+$("btnNewChat").onclick = ()=>{ closePanel("panelHistory"); openPanel("panelChars"); };
+$("btnAddChar").onclick = addChar;
+$("btnSaveChar").onclick = saveChar;
+$("btnDeleteChar").onclick = deleteChar;
+$("btnPickIcon").onclick = ()=>$("iconFile").click();
+$("btnClearIcon").onclick = ()=>{ editIcon=""; showIconPrev(); };
+$("iconFile").onchange = e=>{ if(e.target.files[0]) compressIcon(e.target.files[0]); e.target.value=""; };
+$("btnLoadTxt").onclick = ()=>$("txtFile").click();
+$("txtFile").onchange = e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    const cur = $("cKnowledge").value;
+    $("cKnowledge").value = cur ? cur+"\n\n"+r.result : r.result;
+    kCountUpdate();
+  };
+  r.readAsText(f);
+  e.target.value = "";
+};
+$("cKnowledge").addEventListener("input", kCountUpdate);
+$("btnSaveSettings").onclick = ()=>{
+  settings.anthropicKey = $("sAnthropicKey").value.trim();
+  settings.openrouterKey = $("sOpenrouterKey").value.trim();
+  save(LSK.settings, settings);
+  closePanel("panelSettings");
+};
+[["tUser","user"],["tAI","ai"],["tBg","bg"],["tAccent","accent"]].forEach(p=>{
+  $(p[0]).addEventListener("input", e=>{ settings.theme[p[1]] = e.target.value; applyTheme(); save(LSK.settings, settings); });
+});
+$("tFsize").addEventListener("input", e=>{ settings.theme.fsize = +e.target.value; applyTheme(); save(LSK.settings, settings); });
+$("tRadius").addEventListener("input", e=>{ settings.theme.radius = +e.target.value; applyTheme(); save(LSK.settings, settings); });
+$("tFont").addEventListener("change", e=>{ settings.theme.font = e.target.value; applyTheme(); save(LSK.settings, settings); });
+$("sCache").addEventListener("change", e=>{ settings.cacheMode = e.target.value; save(LSK.settings, settings); });
+$("btnThemeReset").onclick = ()=>{ settings.theme = Object.assign({}, THEME_DEF); fillThemeInputs(); save(LSK.settings, settings); };
+$("btnExportSafe").onclick = exportSafe;
+$("btnExportFull").onclick = exportFull;
+$("btnImport").onclick = ()=>$("importFile").click();
+$("importFile").onchange = e=>{ if(e.target.files[0]) importData(e.target.files[0]); e.target.value=""; };
+$("btnSend").onclick = send;
+$("btnAttach").onclick = ()=>$("attachFile").click();
+$("attachFile").onchange = e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{ pendingAttach = {name:f.name, text:r.result}; renderAttach(); };
+  r.readAsText(f);
+  e.target.value = "";
+};
+$("input").addEventListener("input", function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,132)+"px"; });
+$("messages").addEventListener("click", e=>{
+  const b = e.target.closest(".abtn"); if(!b) return;
+  const act = b.dataset.act, i = +b.dataset.i;
+  if(act==="copy") copyMsg(i, b);
+  if(act==="regen") regenerate();
+  if(act==="edit") editUserMsg(i);
+});
+$("historyList").addEventListener("click", e=>{
+  const ren = e.target.closest("[data-ren]");
+  const dup = e.target.closest("[data-dup]");
+  const del = e.target.closest("[data-del]");
+  const op  = e.target.closest("[data-open]");
+  if(ren) return renameConvo(ren.dataset.ren);
+  if(dup) return dupConvo(dup.dataset.dup);
+  if(del) return deleteConvo(del.dataset.del);
+  if(op) openConvo(op.dataset.open);
+});
+$("charList").addEventListener("click", e=>{
+  const ed = e.target.closest("[data-edit]");
+  const st = e.target.closest("[data-start]");
+  if(ed) return editChar(ed.dataset.edit);
+  if(st) startWith(st.dataset.start);
+});
+
+$("btnChars").textContent = CHAR_BTN_ICON;
+$("input").placeholder = INPUT_PLACEHOLDER;
+applyTheme();
+renderMessages();
+</script>
+</body>
+</html>
