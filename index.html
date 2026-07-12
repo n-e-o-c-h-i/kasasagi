@@ -53,6 +53,12 @@ header::after{
 #messages{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px 12px 8px; scroll-behavior:smooth}
 .arow{display:flex; gap:8px; align-items:flex-end; margin-bottom:14px}
 .arow .msg{margin-bottom:0}
+.arow.me{justify-content:flex-end}
+.dsep{text-align:center; color:var(--dim); font-size:11px; letter-spacing:.1em; margin:16px 0 12px}
+.tstamp{font-size:10px; color:var(--dim); margin-top:5px; text-align:right; letter-spacing:.03em}
+.memcard{background:var(--surface2); border:1px solid var(--wisteria); border-radius:12px; padding:10px 12px; margin-bottom:8px; font-size:13px}
+.memcard .mq{color:var(--wisteria); font-size:11px; letter-spacing:.05em; margin-bottom:3px}
+.memcard .mbtns{display:flex; gap:6px; margin-top:8px}
 .avatar{width:32px; height:32px; border-radius:50%; object-fit:cover; flex:none; border:1px solid var(--line)}
 .avatar.lg{width:46px; height:46px; border-radius:13px}
 .msg{max-width:88%; margin-bottom:14px; white-space:pre-wrap; word-break:break-word;
@@ -68,8 +74,8 @@ header::after{
 .abtn{background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px; font-size:11.5px; padding:3px 10px; font-family:inherit}
 .thinking{margin:-2px 0 8px; font-size:12.5px; color:var(--dim)}
 .thinking summary{cursor:pointer; color:var(--wisteria); font-size:11.5px; letter-spacing:.08em; list-style:none}
-.thinking summary::before{content:"◦ "; color:var(--wisteria)}
-.thinking[open] summary::before{content:"◉ "}
+.thinking summary::before{content:"⟡ "; color:var(--wisteria)}
+.thinking[open] summary::before{content:"✦ "}
 .thinking .tbody{border-left:2px solid var(--wisteria); padding:4px 0 4px 10px; margin-top:6px; opacity:.85; white-space:pre-wrap}
 #empty{color:var(--dim); text-align:center; margin-top:18vh; font-size:13px; letter-spacing:.06em; line-height:2.4}
 #empty .star{color:var(--gold); font-family:"Shippori Mincho",serif; font-size:17px}
@@ -150,6 +156,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
   </header>
   <main id="messages"></main>
   <footer>
+    <div id="memRow"></div>
     <div id="attachRow"></div>
     <div id="inputBar">
       <button class="hbtn" id="btnAttach" style="height:40px" aria-label="ファイル添付">📎</button>
@@ -225,6 +232,13 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
     <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。</div>
     <label>最大出力トークン</label>
     <input type="number" id="cMaxTokens" value="8192" min="256">
+    <label>メモリ <span class="count" id="memCount"></span></label>
+    <div id="memList"></div>
+    <div class="row">
+      <button class="btn mini" id="btnAddMem">＋ 手動で追加</button>
+      <button class="btn mini" id="btnClearMem" style="background:none; border:1px solid var(--error); color:var(--error)">全削除</button>
+    </div>
+    <div class="note">キャラが会話中に「覚えておきたい」と提案し、ねおちが承認したものだけがここに入る。毎回の送信で【保存済みメモリ】としてこのキャラにだけ渡されるよ。</div>
     <button class="btn primary" id="btnSaveChar">保存</button>
     <button class="btn danger" id="btnDeleteChar">このキャラを削除</button>
   </div>
@@ -245,7 +259,9 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
       <option value="std">標準（5分キャッシュ）</option>
       <option value="ext">拡張（1時間キャッシュ・書き込み2倍）</option>
     </select>
-    <div class="note">返信の間隔が5分以上あきがちなら「拡張」の方が節約になるよ。OpenRouterのDeepSeek系は自動キャッシュだから設定不要。現在日時は毎回変わるけど、キャッシュ境界の後ろに置いてあるからキャッシュは壊れない。</div>
+    <div class="note">返信の間隔が5分以上あきがちなら「拡張」の方が節約になるよ。OpenRouterのDeepSeek系は自動キャッシュだから設定不要。現在日付・保存済みメモリなど毎回変わりうるものは、キャッシュ境界の後ろに置いてあるから壊れない。</div>
+    <div class="check"><input type="checkbox" id="sTime"><span>現在時刻もモデルに送る（OFF＝日付のみ）</span></div>
+    <div class="note">OFFなら「今日が何日か」だけ伝わる。返信の間が空いても時刻を意識されたくない場合はOFFのまま推奨。</div>
 
     <div class="hgroup" style="margin-top:26px">見た目</div>
     <div class="trow">
@@ -262,6 +278,15 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
       <option value="zenmaru">Zen Maru Gothic（まるっこい）</option>
     </select>
     <div class="note">Zen Maru GothicはGoogle Fontsから自動で読み込むよ。インストール不要。読み込めない時は勝手に標準フォントに戻る。</div>
+    <div class="check"><input type="checkbox" id="tShowTime"><span>メッセージに時刻と日付区切りを表示</span></div>
+    <label>自分のアイコン</label>
+    <div class="row">
+      <img id="myIconPrev" class="avatar lg" alt="" style="display:none">
+      <button class="btn mini" id="btnPickMyIcon">画像を選ぶ</button>
+      <button class="btn mini" id="btnClearMyIcon">削除</button>
+    </div>
+    <input type="file" id="myIconFile" accept="image/*" style="display:none">
+    <div class="check"><input type="checkbox" id="tShowMyIcon"><span>自分のアイコンを表示</span></div>
     <label>文字サイズ <span class="count" id="fsVal"></span></label>
     <input type="range" id="tFsize" min="13" max="18" step="1">
     <label>吹き出しの角丸 <span class="count" id="rdVal"></span></label>
@@ -301,7 +326,11 @@ const THINK_LEVELS = {
 /* 新世代Claude（Fable 5 / Opus 4.7・4.8 / Sonnet 5系）はadaptive思考のみ対応。
    旧来のenabled+budget_tokensを送ると400エラーになるため、自動でadaptiveに切り替える */
 const ADAPTIVE_ONLY = /fable|mythos|opus-4-[78]|sonnet-5/;
-const THEME_DEF = { bg:"#10162B", user:"#2E3A5F", ai:"#1A2138", accent:"#D6B36A", font:"system", fsize:15, radius:14 };
+/* 承認制メモリ：候補の受け渡しに使う記号（本文からは自動で取り除かれる） */
+const MEM_MARK = "⟪MEMORY⟫";
+const MEM_END = "⟪/MEMORY⟫";
+const MEM_INSTRUCTION = "【メモリ提案の規則（アプリ機能・本文で言及しない）】\nこの会話には承認制メモリ機能がある。ユーザーが明示した長期的に重要な事実・好み・決定・大きな出来事があり、かつ【保存済みメモリ】にまだ無い場合のみ、返答本文の一番最後に次の形式で提案してよい（最大3件。該当がなければ何も付けない）：\n⟪MEMORY⟫\n- 提案内容（簡潔な一文）\n⟪/MEMORY⟫\n提案しないもの：推測や不確かな情報、一時的な話題、些細な内容、APIキー・パスワード等の認証情報。保存の可否は必ずユーザーが決める。";
+const THEME_DEF = { bg:"#10162B", user:"#2E3A5F", ai:"#1A2138", accent:"#D6B36A", font:"system", fsize:15, radius:14, showTime:true, showMyIcon:true };
 const load = (k,d)=>{ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } };
 const save = (k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ alert("保存に失敗しました（容量不足かも）。安全バックアップを書き出して、古い会話やアイコンを削除してね。"); } };
 const uid = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -318,10 +347,14 @@ let editIcon = "";
 let pendingAttach = null;
 /* 直近の画像本体：セッション内のみ保持（localStorageには保存しない）。同セッション内の再生成時に再送するため */
 let sessionImage = null;
+/* 承認待ちのメモリ候補（セッション内のみ。保存はユーザー承認後） */
+let pendingMemories = [];
 
 /* 既存データの穏やかな移行（壊さない） */
 settings.theme = Object.assign({}, THEME_DEF, settings.theme||{});
 if(!settings.cacheMode) settings.cacheMode = "std";
+if(settings.sendTime===undefined) settings.sendTime = false;
+if(settings.userIcon===undefined) settings.userIcon = "";
 if(!chars){
   chars = [
     {id:uid(), name:"ふぇいくん", provider:"anthropic", model:"claude-fable-5", system:"", knowledge:"", icon:"", think:"mid", maxTokens:8192},
@@ -334,6 +367,7 @@ chars.forEach(c=>{
   if(c.icon===undefined)c.icon="";
   /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
   if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
+  if(c.memories===undefined) c.memories = [];
 });
 save(LSK.chars, chars); save(LSK.settings, settings);
 
@@ -367,6 +401,8 @@ function applyTheme(){
 function fillThemeInputs(){
   const t = settings.theme;
   $("tUser").value=t.user; $("tAI").value=t.ai; $("tBg").value=t.bg; $("tAccent").value=t.accent; $("tFont").value=t.font||"system";
+  $("tShowTime").checked = t.showTime!==false; $("tShowMyIcon").checked = t.showMyIcon!==false;
+  showMyIconPrev();
   $("tFsize").value=t.fsize; $("tRadius").value=t.radius;
   applyTheme();
 }
@@ -378,6 +414,7 @@ function renderHeader(){
 }
 function metaLine(m){
   let bits=[];
+  if(settings.theme.showTime && m.ts) bits.push(fmtTime(m.ts));
   if(m.model) bits.push(m.model);
   if(m.usage){
     const u=m.usage;
@@ -414,11 +451,15 @@ function msgHTML(m, i, msgs, ch){
   inner += '<span class="body">'+esc(m.content)+'</span>';
   const meta = m.role==="assistant" ? metaLine(m) : "";
   if(meta) inner += '<div class="meta">'+meta+'</div>';
+  if(m.role==="user" && settings.theme.showTime && m.ts) inner += '<div class="tstamp">'+fmtTime(m.ts)+'</div>';
   inner += actsHTML(m, i, msgs);
   inner += '</div>';
   if(m.role==="assistant"){
     const av = ch && ch.icon ? '<img class="avatar" src="'+ch.icon+'" alt="">' : "";
     return '<div class="arow">'+av+inner+'</div>';
+  }
+  if(m.role==="user" && settings.theme.showMyIcon && settings.userIcon){
+    return '<div class="arow me">'+inner+'<img class="avatar" src="'+settings.userIcon+'" alt=""></div>';
   }
   return inner;
 }
@@ -430,7 +471,20 @@ function renderMessages(){
     renderHeader(); return;
   }
   const ch = charOf(c);
-  el.innerHTML = c.messages.map((m,i)=>msgHTML(m, i, c.messages, ch)).join("");
+  let h = "", lastD = "";
+  const W = ["日","月","火","水","木","金","土"];
+  c.messages.forEach((m,i)=>{
+    if(settings.theme.showTime && m.ts){
+      const d = new Date(m.ts);
+      const key = d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate();
+      if(key !== lastD){
+        lastD = key;
+        h += '<div class="dsep">'+d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日（'+W[d.getDay()]+'）</div>';
+      }
+    }
+    h += msgHTML(m, i, c.messages, ch);
+  });
+  el.innerHTML = h;
   el.scrollTop = el.scrollHeight;
   renderHeader();
 }
@@ -537,7 +591,7 @@ function compressImage(file){
   };
   r.readAsDataURL(file);
 }
-function compressIcon(file){
+function compressIcon(file, done){
   const r = new FileReader();
   r.onload = ()=>{
     const img = new Image();
@@ -547,8 +601,7 @@ function compressIcon(file){
       const ctx = cv.getContext("2d");
       const m = Math.min(img.width, img.height);
       ctx.drawImage(img, (img.width-m)/2, (img.height-m)/2, m, m, 0, 0, s, s);
-      editIcon = cv.toDataURL("image/jpeg", 0.82);
-      showIconPrev();
+      done(cv.toDataURL("image/jpeg", 0.82));
     };
     img.onerror = ()=>alert("画像を読み込めなかった…別の画像で試してみて。");
     img.src = r.result;
@@ -562,7 +615,7 @@ function editChar(id){
   $("cName").value=ch.name; $("cProvider").value=ch.provider; $("cModel").value=ch.model;
   $("cSystem").value=ch.system; $("cKnowledge").value=ch.knowledge||"";
   $("cThink").value=ch.think||"off"; $("cMaxTokens").value=ch.maxTokens||8192;
-  editIcon = ch.icon||""; showIconPrev(); kCountUpdate();
+  editIcon = ch.icon||""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
 }
 function addChar(){
@@ -571,7 +624,7 @@ function addChar(){
   $("cName").value=""; $("cProvider").value="anthropic"; $("cModel").value="";
   $("cSystem").value=""; $("cKnowledge").value="";
   $("cThink").value="off"; $("cMaxTokens").value=8192;
-  editIcon = ""; showIconPrev(); kCountUpdate();
+  editIcon = ""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
 }
 function saveChar(){
@@ -593,7 +646,8 @@ function deleteChar(){
   if(chars.length<=1){ alert("最後の一人は削除できないよ。"); return; }
   const ch = chars.find(c=>c.id===editCharId);
   if(!confirm("キャラ「"+ch.name+"」を削除する？")) return;
-  if(!confirm("本当に削除する？（会話履歴は「削除済みキャラ」として残るけど、キャラ設定は戻せないよ。心配なら先に安全バックアップを）")) return;
+  const mn = (ch.memories||[]).length;
+  if(!confirm("本当に削除する？（会話履歴は「削除済みキャラ」として残るけど、キャラ設定"+(mn?"とメモリ"+mn+"件":"")+"は戻せないよ。心配なら先に安全バックアップを）")) return;
   chars = chars.filter(c=>c.id!==editCharId);
   save(LSK.chars, chars);
   renderChars(); closePanel("panelCharEdit");
@@ -647,10 +701,12 @@ async function apiError(resp, ch){
 function nowStamp(){
   const d = new Date();
   const w = ["日","月","火","水","木","金","土"][d.getDay()];
+  const base = "【現在日付】"+d.getFullYear()+"年"+(d.getMonth()+1)+"月"+d.getDate()+"日（"+w+"）";
+  if(!settings.sendTime) return base;
   const p = n=>String(n).padStart(2,"0");
   let tz = "";
   try{ tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }catch(e){}
-  return "【現在日時】"+d.getFullYear()+"年"+(d.getMonth()+1)+"月"+d.getDate()+"日（"+w+"）"+p(d.getHours())+":"+p(d.getMinutes())+(tz?" / タイムゾーン："+tz:"");
+  return base.replace("【現在日付】","【現在日時】")+" "+p(d.getHours())+":"+p(d.getMinutes())+(tz?" / タイムゾーン："+tz:"");
 }
 function cacheCtl(){
   return settings.cacheMode==="ext" ? {type:"ephemeral", ttl:"1h"} : {type:"ephemeral"};
@@ -659,6 +715,7 @@ function systemParts(ch){
   const parts = [];
   if(ch.system && ch.system.trim()) parts.push(ch.system.trim());
   if(ch.knowledge && ch.knowledge.trim()) parts.push("【参考ナレッジ】\n以下はキャラクターと世界観の背景資料。\n\n"+ch.knowledge.trim());
+  parts.push(MEM_INSTRUCTION); /* 固定文なのでキャッシュに乗る */
   return parts;
 }
 
@@ -667,12 +724,14 @@ async function callAnthropic(ch, msgs, hooks, img){
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
   const thinkOn = ch.think && ch.think !== "off";
   const adaptive = ADAPTIVE_ONLY.test(ch.model);
+  const memTxt = memBlock(ch);
   const apiMsgs = msgs.map((m,i)=>{
     if(i===msgs.length-1 && m.role==="user")
       /* 現在日時と画像はキャッシュ境界（cache_control）の後ろ＝キャッシュを壊さない位置 */
       return {role:"user", content:[
         {type:"text", text:m.content, cache_control:cacheCtl()},
         ...(img ? [{type:"image", source:{type:"base64", media_type:"image/jpeg", data:img.split(",")[1]}}] : []),
+        ...(memTxt ? [{type:"text", text:memTxt}] : []),
         {type:"text", text:nowStamp()}
       ]};
     return {role:m.role, content:m.content};
@@ -719,6 +778,7 @@ async function callAnthropic(ch, msgs, hooks, img){
 async function callOpenRouter(ch, msgs, hooks, img){
   if(!settings.openrouterKey) throw new Error("OpenRouterのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const isClaude = /claude|anthropic/i.test(ch.model);
+  const memTxt = memBlock(ch);
   const apiMsgs = [];
   const parts = systemParts(ch);
   if(parts.length){
@@ -732,6 +792,7 @@ async function callOpenRouter(ch, msgs, hooks, img){
       /* 現在日時と画像は末尾側＝DeepSeek等の自動プレフィックスキャッシュも壊さない */
       const parts = [{type:"text", text:m.content}];
       if(img) parts.push({type:"image_url", image_url:{url:img}});
+      if(memTxt) parts.push({type:"text", text:memTxt});
       parts.push({type:"text", text:nowStamp()});
       if(isClaude) parts[0].cache_control = cacheCtl();
       apiMsgs.push({role:"user", content:parts});
@@ -766,7 +827,7 @@ async function send(){
   if(streaming){ if(aborter) aborter.abort(); return; }
   let text = $("input").value.trim();
   if(!text && !pendingAttach) return;
-  const msg = {role:"user", content:text};
+  const msg = {role:"user", content:text, ts:Date.now()};
   if(pendingAttach){
     if(pendingAttach.kind==="image"){
       /* 画像本体はlocalStorageに保存しない（容量対策）。履歴にはサムネイルだけ残し、
@@ -824,6 +885,45 @@ function fallbackCopy(text, ok){
   try{ document.execCommand("copy"); ok(); }catch(e){ alert("コピーできなかった…長押しで選択してみて。"); }
   document.body.removeChild(ta);
 }
+function fmtTime(ts){ const d = new Date(ts), p = n=>String(n).padStart(2,"0"); return p(d.getHours())+":"+p(d.getMinutes()); }
+function memBlock(ch){
+  if(!ch.memories || !ch.memories.length) return "";
+  return "【保存済みメモリ】（"+ch.name+"がこれまでの会話で保存した記録）\n" + ch.memories.map(m=>"- "+m.text).join("\n");
+}
+function hasMemory(ch, t){ return (ch.memories||[]).some(m=>m.text===t); }
+function saveMemory(charId, text){
+  const ch = chars.find(c=>c.id===charId); if(!ch) return;
+  if(!ch.memories) ch.memories = [];
+  if(hasMemory(ch, text)){ alert("同じ内容がもう保存されてるよ。"); return; }
+  ch.memories.push({id:uid(), text:text, ts:Date.now()});
+  save(LSK.chars, chars);
+}
+function renderMemCards(){
+  const el = $("memRow");
+  el.innerHTML = pendingMemories.map((p,i)=>
+    '<div class="memcard"><div class="mq">'+esc(p.charName)+'がこれを覚えておきたいようです</div>'+
+    '<div>'+esc(p.text)+'</div>'+
+    '<div class="mbtns">'+
+    '<button class="abtn" data-mem="save" data-mi="'+i+'">保存する</button>'+
+    '<button class="abtn" data-mem="edit" data-mi="'+i+'">編集して保存</button>'+
+    '<button class="abtn" data-mem="no" data-mi="'+i+'">保存しない</button>'+
+    '</div></div>'
+  ).join("");
+}
+function renderMemList(){
+  const el = $("memList");
+  if(!editCharId){ el.innerHTML = '<div class="note">キャラを保存した後に使えるよ。</div>'; $("memCount").textContent=""; return; }
+  const ch = chars.find(c=>c.id===editCharId);
+  const list = (ch && ch.memories) || [];
+  el.innerHTML = list.length ? list.map(m=>
+    '<div class="card"><div class="row"><div class="grow" style="font-size:13px">'+esc(m.text)+'</div>'+
+    '<button class="hbtn" data-medit="'+m.id+'">✎</button>'+
+    '<button class="hbtn" data-mdel="'+m.id+'">🗑</button></div></div>'
+  ).join("") : '<div class="note">まだメモリはないよ。</div>';
+  const n = list.reduce((a,m)=>a+m.text.length, 0);
+  $("memCount").textContent = list.length ? list.length+"件"+(n>3000 ? "（長め：毎回送信されるからトークン注意）" : "") : "";
+  $("memCount").className = n>3000 ? "count warn" : "count";
+}
 function renderAttach(){
   const el = $("attachRow");
   el.innerHTML = pendingAttach
@@ -854,7 +954,7 @@ async function runAssistant(c){
   const stick = ()=>{ if(nearBottom()) el.scrollTop = el.scrollHeight; };
   const hooks = {
     onThinking:t=>{ am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
-    onText:t=>{ am.content += t; bodySpan.textContent = am.content; think.open = false; stick(); },
+    onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; think.open = false; stick(); },
   };
   try{
     const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
@@ -866,6 +966,23 @@ async function runAssistant(c){
     else c.messages.push({role:"error", content:err.message});
   }
   if(!am.thinking) delete am.thinking;
+  /* 承認制メモリ：候補ブロックを本文から抽出して取り除く */
+  if(am.content && am.content.indexOf(MEM_MARK) >= 0){
+    const i0 = am.content.indexOf(MEM_MARK);
+    const i1 = am.content.indexOf(MEM_END);
+    const raw = am.content.slice(i0 + MEM_MARK.length, i1 > i0 ? i1 : am.content.length);
+    am.content = am.content.slice(0, i0).trimEnd();
+    let added = 0;
+    raw.split("\n").forEach(line=>{
+      const t = line.replace(/^[-・\s]+/, "").trim();
+      if(t && added < 3 && !hasMemory(ch, t) && !pendingMemories.some(p=>p.text===t)){
+        pendingMemories.push({charId:ch.id, charName:ch.name, text:t});
+        added++;
+      }
+    });
+    renderMemCards();
+  }
+  am.ts = Date.now();
   streaming = false; aborter = null;
   $("btnSend").textContent = "↑"; $("btnSend").classList.remove("stop");
   c.updated = Date.now();
@@ -883,7 +1000,7 @@ function download(obj, name){
 }
 function exportSafe(){
   download(
-    {kind:"safe", settings:{anthropicKey:"", openrouterKey:"", theme:settings.theme}, chars, convos},
+    {kind:"safe", settings:{anthropicKey:"", openrouterKey:"", theme:settings.theme, userIcon:settings.userIcon, sendTime:settings.sendTime}, chars, convos},
     "kasasagi_safe_" + new Date().toISOString().slice(0,10) + ".json"
   );
 }
@@ -906,6 +1023,8 @@ function importData(file){
         settings.anthropicKey = d.settings.anthropicKey || settings.anthropicKey;
         settings.openrouterKey = d.settings.openrouterKey || settings.openrouterKey;
         if(d.settings.theme) settings.theme = Object.assign({}, THEME_DEF, d.settings.theme);
+        if(d.settings.userIcon!==undefined) settings.userIcon = d.settings.userIcon;
+        if(d.settings.sendTime!==undefined) settings.sendTime = d.settings.sendTime;
       }
       chars = d.chars; convos = d.convos;
       chars.forEach(c=>{
@@ -913,6 +1032,7 @@ function importData(file){
   if(c.icon===undefined)c.icon="";
   /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
   if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
+  if(c.memories===undefined) c.memories = [];
 });
       save(LSK.settings, settings); save(LSK.chars, chars); save(LSK.convos, convos);
       alert("復元したよ！"); location.reload();
@@ -928,6 +1048,7 @@ $("btnSettings").onclick = ()=>{
   $("sAnthropicKey").value = settings.anthropicKey;
   $("sOpenrouterKey").value = settings.openrouterKey;
   $("sCache").value = settings.cacheMode;
+  $("sTime").checked = !!settings.sendTime;
   fillThemeInputs();
   openPanel("panelSettings");
 };
@@ -938,7 +1059,7 @@ $("btnSaveChar").onclick = saveChar;
 $("btnDeleteChar").onclick = deleteChar;
 $("btnPickIcon").onclick = ()=>$("iconFile").click();
 $("btnClearIcon").onclick = ()=>{ editIcon=""; showIconPrev(); };
-$("iconFile").onchange = e=>{ if(e.target.files[0]) compressIcon(e.target.files[0]); e.target.value=""; };
+$("iconFile").onchange = e=>{ const f=e.target.files[0]; if(f) compressIcon(f, u=>{ editIcon=u; showIconPrev(); }); e.target.value=""; };
 $("btnLoadTxt").onclick = ()=>$("txtFile").click();
 $("txtFile").onchange = e=>{
   const f = e.target.files[0]; if(!f) return;
@@ -950,6 +1071,58 @@ $("txtFile").onchange = e=>{
   };
   r.readAsText(f);
   e.target.value = "";
+};
+function showMyIconPrev(){
+  const img = $("myIconPrev");
+  if(settings.userIcon){ img.src = settings.userIcon; img.style.display = ""; }
+  else { img.removeAttribute("src"); img.style.display = "none"; }
+}
+$("btnPickMyIcon").onclick = ()=>$("myIconFile").click();
+$("btnClearMyIcon").onclick = ()=>{ settings.userIcon=""; save(LSK.settings, settings); showMyIconPrev(); renderMessages(); };
+$("myIconFile").onchange = e=>{
+  const f = e.target.files[0]; if(!f) return;
+  compressIcon(f, u=>{ settings.userIcon = u; save(LSK.settings, settings); showMyIconPrev(); renderMessages(); });
+  e.target.value = "";
+};
+$("sTime").onchange = e=>{ settings.sendTime = e.target.checked; save(LSK.settings, settings); };
+$("tShowTime").onchange = e=>{ settings.theme.showTime = e.target.checked; save(LSK.settings, settings); renderMessages(); };
+$("tShowMyIcon").onchange = e=>{ settings.theme.showMyIcon = e.target.checked; save(LSK.settings, settings); renderMessages(); };
+$("memRow").addEventListener("click", e=>{
+  const b = e.target.closest("[data-mem]"); if(!b) return;
+  const i = +b.dataset.mi; const p = pendingMemories[i]; if(!p) return;
+  if(b.dataset.mem==="no"){ pendingMemories.splice(i,1); renderMemCards(); return; }
+  let text = p.text;
+  if(b.dataset.mem==="edit"){ const t = prompt("メモリの内容を編集", p.text); if(t===null) return; text = t.trim(); if(!text) return; }
+  saveMemory(p.charId, text);
+  pendingMemories.splice(i,1); renderMemCards();
+});
+$("memList").addEventListener("click", e=>{
+  const ed = e.target.closest("[data-medit]"), dl = e.target.closest("[data-mdel]");
+  const ch = chars.find(c=>c.id===editCharId); if(!ch) return;
+  if(ed){
+    const m = ch.memories.find(x=>x.id===ed.dataset.medit); if(!m) return;
+    const t = prompt("メモリを編集", m.text); if(t===null) return;
+    if(t.trim()){ m.text = t.trim(); m.ts = Date.now(); save(LSK.chars, chars); }
+    renderMemList();
+  }
+  if(dl){
+    if(!confirm("このメモリを削除する？")) return;
+    ch.memories = ch.memories.filter(x=>x.id!==dl.dataset.mdel);
+    save(LSK.chars, chars); renderMemList();
+  }
+});
+$("btnAddMem").onclick = ()=>{
+  if(!editCharId){ alert("先にキャラを保存してね。"); return; }
+  const t = prompt("覚えさせたい内容"); if(!t || !t.trim()) return;
+  saveMemory(editCharId, t.trim()); renderMemList();
+};
+$("btnClearMem").onclick = ()=>{
+  if(!editCharId) return;
+  const ch = chars.find(c=>c.id===editCharId);
+  if(!ch || !ch.memories.length) return;
+  if(!confirm("このキャラのメモリ"+ch.memories.length+"件を全部削除する？")) return;
+  if(!confirm("本当に全部消す？元に戻せないよ。")) return;
+  ch.memories = []; save(LSK.chars, chars); renderMemList();
 };
 $("cKnowledge").addEventListener("input", kCountUpdate);
 $("btnSaveSettings").onclick = ()=>{
