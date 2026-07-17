@@ -228,8 +228,14 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
       <option value="mid">🌓 中</option>
       <option value="high">🌕 高</option>
       <option value="max">✨ 最高</option>
+      <option value="solo">💭 擬似（内面独白）</option>
     </select>
-    <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。</div>
+    <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。<br>「💭 擬似」は思考非対応モデル（Gemma等）向け：本物の思考の代わりに、表示用の内面独白を書かせて思考プロセス欄に出すモード。独白ぶんの出力トークンは普通に消費されるよ。</div>
+    <div id="soloBox" style="display:none">
+      <label>独白スタイル（任意・このキャラ専用）</label>
+      <textarea id="cSolo" rows="3" placeholder="例：独白は静かな観察者の口調で。感情より状況分析を優先。／空欄なら標準の指示だけで動くよ"></textarea>
+      <div class="note">擬似モードの時だけ使われる。ここを変えるとキャッシュは作り直しになるけど、固定している間はキャッシュに乗るから毎ターンの損はないよ。</div>
+    </div>
     <label>最大出力トークン</label>
     <input type="number" id="cMaxTokens" value="8192" min="256">
     <label>メモリ <span class="count" id="memCount"></span></label>
@@ -322,7 +328,58 @@ const THINK_LEVELS = {
   mid:{label:"🌓 中", budget:8192},
   high:{label:"🌕 高", budget:16384},
   max:{label:"✨ 最高", budget:32768},
+  solo:{label:"💭 擬似独白", budget:0}, /* 擬似モード：APIの思考機能は使わない（budgetは未使用） */
 };
+/* 擬似（内面独白）モード：思考非対応モデルに、表示用の独白をタグ付きで書かせる。
+   受信側でタグを解析して思考プロセス欄に振り分ける（soloWrap参照）。
+   指示文はキャラ編集時にしか変わらない＝system・ナレッジと同じ変化周期なのでキャッシュ対象に含めてOK */
+const SOLO_OPEN = "<monologue>";
+const SOLO_CLOSE = "</monologue>";
+const SOLO_INSTRUCTION = "【内面独白（アプリ機能・本文で言及しない）】\n毎回の応答は、必ず一番最初に "+SOLO_OPEN+" を置き、キャラクターの内面独白を書き、"+SOLO_CLOSE+" で閉じてから、通常の返答本文を続けること。\n独白の書き方：一人称の心の声。直前の相手の言葉を受けて、いま感じたこと・考えたこと・迷いを数文〜1段落で。返答の下書きや要約ではなく、口には出さない本音を書く。\n厳守：タグの綴りは一字も変えない。独白とタグを本文に混ぜない。独白を省略しない。";
+function soloInstruction(ch){
+  const style = ch.soloStyle && ch.soloStyle.trim();
+  return SOLO_INSTRUCTION + (style ? "\n【独白スタイル（このキャラ専用の指定）】\n"+style : "");
+}
+/* ストリーミング中のタグ振り分け：<monologue>内→onThinking、閉じタグ以降→onText。
+   タグで始まらなかったら全文を本文扱いにフォールバック（小型モデルの指示無視対策） */
+function soloWrap(inner){
+  let state = 0; /* 0=冒頭のタグ待ち 1=独白中 2=本文 */
+  let buf = "";
+  return {
+    onThinking: inner.onThinking, /* 万一ネイティブ思考が来てもそのまま通す */
+    onText: t=>{
+      buf += t;
+      while(true){
+        if(state===0){
+          const lead = buf.replace(/^\s+/, "");
+          if(!lead) return;
+          if(lead.startsWith(SOLO_OPEN)){ state = 1; buf = lead.slice(SOLO_OPEN.length); continue; }
+          if(SOLO_OPEN.startsWith(lead)) return; /* タグの途中かも：続きを待つ */
+          state = 2; buf = lead; continue; /* タグ無し＝全部本文 */
+        }
+        if(state===1){
+          const i = buf.indexOf(SOLO_CLOSE);
+          if(i >= 0){
+            if(i > 0) inner.onThinking(buf.slice(0, i));
+            state = 2; buf = buf.slice(i + SOLO_CLOSE.length).replace(/^\s+/, "");
+            continue;
+          }
+          const keep = SOLO_CLOSE.length - 1; /* 閉じタグがチャンク境界で割れる場合に備えて末尾を保留 */
+          if(buf.length > keep){ inner.onThinking(buf.slice(0, buf.length - keep)); buf = buf.slice(buf.length - keep); }
+          return;
+        }
+        if(buf){ inner.onText(buf); buf = ""; }
+        return;
+      }
+    },
+    flush: ()=>{ /* ストリーム終了・中断時：残りを適切な側へ吐き出す */
+      if(!buf) return;
+      if(state===1) inner.onThinking(buf);
+      else inner.onText(buf.replace(/^\s+/, ""));
+      buf = "";
+    },
+  };
+}
 /* 新世代Claude（Fable 5 / Opus 4.7・4.8 / Sonnet 5系）はadaptive思考のみ対応。
    旧来のenabled+budget_tokensを送ると400エラーになるため、自動でadaptiveに切り替える */
 const ADAPTIVE_ONLY = /fable|mythos|opus-4-[78]|sonnet-5/;
@@ -368,6 +425,7 @@ chars.forEach(c=>{
   /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
   if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
   if(c.memories===undefined) c.memories = [];
+  if(c.soloStyle===undefined) c.soloStyle = "";
 });
 save(LSK.chars, chars); save(LSK.settings, settings);
 
@@ -546,7 +604,7 @@ function renderChars(){
     const av = ch.icon ? '<img class="avatar" src="'+ch.icon+'" alt="">' : "";
     return '<div class="card"><div class="row">'+av+
     '<div class="grow" data-start="'+ch.id+'"><div class="t">'+esc(ch.name)+'</div>'+
-    '<div class="s">'+esc(ch.provider)+' · '+esc(ch.model)+(ch.think&&ch.think!=="off"?" · 思考"+THINK_LEVELS[ch.think].label:"")+(ch.knowledge?" · ナレッジあり":"")+'</div></div>'+
+    '<div class="s">'+esc(ch.provider)+' · '+esc(ch.model)+(ch.think==="solo"?" · 💭 擬似独白":(ch.think&&ch.think!=="off"?" · 思考"+THINK_LEVELS[ch.think].label:""))+(ch.knowledge?" · ナレッジあり":"")+'</div></div>'+
     '<button class="hbtn" data-edit="'+ch.id+'">✎</button></div></div>';
   }).join("");
 }
@@ -615,6 +673,7 @@ function editChar(id){
   $("cName").value=ch.name; $("cProvider").value=ch.provider; $("cModel").value=ch.model;
   $("cSystem").value=ch.system; $("cKnowledge").value=ch.knowledge||"";
   $("cThink").value=ch.think||"off"; $("cMaxTokens").value=ch.maxTokens||8192;
+  $("cSolo").value = ch.soloStyle||""; updateSoloBox();
   editIcon = ch.icon||""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
 }
@@ -624,6 +683,7 @@ function addChar(){
   $("cName").value=""; $("cProvider").value="anthropic"; $("cModel").value="";
   $("cSystem").value=""; $("cKnowledge").value="";
   $("cThink").value="off"; $("cMaxTokens").value=8192;
+  $("cSolo").value = ""; updateSoloBox();
   editIcon = ""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
 }
@@ -633,6 +693,7 @@ function saveChar(){
     model:$("cModel").value.trim(), system:$("cSystem").value,
     knowledge:$("cKnowledge").value, icon:editIcon,
     think:$("cThink").value,
+    soloStyle:$("cSolo").value,
     maxTokens:Math.max(256, parseInt($("cMaxTokens").value)||8192),
   };
   if(!data.model){ alert("モデルIDを入れてね。"); return; }
@@ -686,7 +747,7 @@ function friendlyError(status, raw, ch){
   if(status===401||status===403) return "APIキーが無効か、権限がないみたい。⚙︎ 設定で"+dash+"のキーを確認してね。";
   if(status===404 || /model.*not.*found|not_found/.test(r)) return "モデルID「"+ch.model+"」が見つからないよ。綴りを確認してね。"+(ch.provider==="openrouter"?"OpenRouterのサイトから正確なIDをコピーするのが確実。":"");
   if(/image|vision|multimodal/.test(r) && /support|unsupported|invalid|not.*avail|cannot|unable/.test(r)) return "このモデルは画像添付に対応していません。画像なしで送るか、対応モデル（Claude系・GPT系・Gemini系など）に切り替えてね。";
-  if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」にすると通るよ。";
+  if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」か「💭 擬似（内面独白）」にすると通るよ。擬似なら思考欄に独白を表示できる。";
   if(status===402 || /credit|balance|billing|insufficient|quota/.test(r)) return "残高が足りないみたい。"+dash+"のダッシュボードでクレジットを確認してね。";
   if(/prompt is too long|context|too long|maximum.*tokens|exceed/.test(r)) return "会話＋ナレッジが長すぎて上限を超えたみたい。新しい会話を始めるか、ナレッジを短くしてみて。";
   if(status===429) return "レート制限にかかったよ。少し待ってからもう一度ね。";
@@ -715,6 +776,7 @@ function systemParts(ch){
   const parts = [];
   if(ch.system && ch.system.trim()) parts.push(ch.system.trim());
   if(ch.knowledge && ch.knowledge.trim()) parts.push("【参考ナレッジ】\n以下はキャラクターと世界観の背景資料。\n\n"+ch.knowledge.trim());
+  if(ch.think==="solo") parts.push(soloInstruction(ch)); /* キャラ編集時にしか変わらない＝キャッシュ対象に含めて損しない */
   parts.push(MEM_INSTRUCTION); /* 固定文なのでキャッシュに乗る */
   return parts;
 }
@@ -722,7 +784,7 @@ function systemParts(ch){
 async function callAnthropic(ch, msgs, hooks, img){
   if(!settings.anthropicKey) throw new Error("AnthropicのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
-  const thinkOn = ch.think && ch.think !== "off";
+  const thinkOn = ch.think && ch.think !== "off" && ch.think !== "solo"; /* 擬似モードはAPIの思考機能を使わない */
   const adaptive = ADAPTIVE_ONLY.test(ch.model);
   const memTxt = memBlock(ch);
   const apiMsgs = msgs.map((m,i)=>{
@@ -800,7 +862,7 @@ async function callOpenRouter(ch, msgs, hooks, img){
   });
   const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
-  if(ch.think && ch.think !== "off") body.reasoning = {max_tokens: tl.budget};
+  if(ch.think && ch.think !== "off" && ch.think !== "solo") body.reasoning = {max_tokens: tl.budget}; /* 擬似モードはreasoning非送信 */
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST", signal:aborter.signal,
     headers:{ "content-type":"application/json", "authorization":"Bearer "+settings.openrouterKey },
@@ -952,15 +1014,19 @@ async function runAssistant(c){
   const bodySpan = bubble.querySelector(".body");
   const nearBottom = ()=> el.scrollHeight - el.scrollTop - el.clientHeight < 140;
   const stick = ()=>{ if(nearBottom()) el.scrollTop = el.scrollHeight; };
-  const hooks = {
+  const rawHooks = {
     onThinking:t=>{ am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
     onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; think.open = false; stick(); },
   };
+  /* 擬似（内面独白）モードの時だけタグ振り分けを挟む。他モードは素通し＝既存挙動そのまま */
+  const hooks = ch.think==="solo" ? soloWrap(rawHooks) : rawHooks;
   try{
     const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
+    if(hooks.flush) hooks.flush();
     am.usage = usage;
     if(!am.content && !am.thinking) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
   }catch(err){
+    if(hooks.flush) hooks.flush(); /* 中断時もバッファ内の文字を捨てない */
     if(err.name==="AbortError"){ if(!am.content) am.content = "（停止したよ）"; }
     else if(err instanceof TypeError) c.messages.push({role:"error", content:"通信に失敗したよ。電波を確認してもう一度送ってみて。"});
     else c.messages.push({role:"error", content:err.message});
@@ -1033,6 +1099,7 @@ function importData(file){
   /* 旧バージョン（thinking真偽値＋budget）からの穏やかな移行 */
   if(c.think===undefined) c.think = c.thinking ? (c.budget>=16384?"high": c.budget>=8192?"mid":"low") : "off";
   if(c.memories===undefined) c.memories = [];
+  if(c.soloStyle===undefined) c.soloStyle = "";
 });
       save(LSK.settings, settings); save(LSK.chars, chars); save(LSK.convos, convos);
       alert("復元したよ！"); location.reload();
@@ -1125,6 +1192,8 @@ $("btnClearMem").onclick = ()=>{
   ch.memories = []; save(LSK.chars, chars); renderMemList();
 };
 $("cKnowledge").addEventListener("input", kCountUpdate);
+function updateSoloBox(){ $("soloBox").style.display = $("cThink").value==="solo" ? "" : "none"; }
+$("cThink").addEventListener("change", updateSoloBox);
 $("btnSaveSettings").onclick = ()=>{
   settings.anthropicKey = $("sAnthropicKey").value.trim();
   settings.openrouterKey = $("sOpenrouterKey").value.trim();
