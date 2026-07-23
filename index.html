@@ -234,7 +234,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
     <div id="soloBox" style="display:none">
       <label>独白スタイル（任意・このキャラ専用）</label>
       <textarea id="cSolo" rows="3" placeholder="例：独白は静かな観察者の口調で。感情より状況分析を優先。／空欄なら標準の指示だけで動くよ"></textarea>
-      <div class="note">擬似モードの時だけ使われる。ここを変えるとキャッシュは作り直しになるけど、固定している間はキャッシュに乗るから毎ターンの損はないよ。</div>
+      <div class="note">擬似モードの時だけ使われる。ここを変えるとキャッシュは作り直しになるけど、固定している間はキャッシュに乗るから毎ターンの損はないよ。思考機能を持つモデル（Gemini等）で擬似を使った場合、モデル本来の思考は表示せず、独白だけを思考欄に出すよ。</div>
     </div>
     <label>最大出力トークン</label>
     <input type="number" id="cMaxTokens" value="8192" min="256">
@@ -335,7 +335,7 @@ const THINK_LEVELS = {
    指示文はキャラ編集時にしか変わらない＝system・ナレッジと同じ変化周期なのでキャッシュ対象に含めてOK */
 const SOLO_OPEN = "<monologue>";
 const SOLO_CLOSE = "</monologue>";
-const SOLO_INSTRUCTION = "【内面独白（アプリ機能・本文で言及しない）】\n毎回の応答は、必ず一番最初に "+SOLO_OPEN+" を置き、キャラクターの内面独白を書き、"+SOLO_CLOSE+" で閉じてから、通常の返答本文を続けること。\n独白の書き方：一人称の心の声。直前の相手の言葉を受けて、いま感じたこと・考えたこと・迷いを数文〜1段落で。返答の下書きや要約ではなく、口には出さない本音を書く。\n厳守：タグの綴りは一字も変えない。独白とタグを本文に混ぜない。独白を省略しない。";
+const SOLO_INSTRUCTION = "【内面独白（アプリ機能・本文で言及しない）】\n毎回の応答は、必ず一番最初に "+SOLO_OPEN+" を置き、キャラクターの内面独白を書き、"+SOLO_CLOSE+" で閉じてから、通常の返答本文を続けること。\n独白の書き方：一人称の心の声。直前の相手の言葉を受けて、いま感じたこと・考えたこと・迷いを数文〜1段落で。返答の下書きや要約ではなく、口には出さない本音を書く。\n厳守：タグは半角の "+SOLO_OPEN+" と "+SOLO_CLOSE+" だけを使い、綴りを一字も変えない（monogle等の短縮形は不可）。独白とタグを本文に混ぜない。独白を省略しない。閉じタグの後には必ず返答本文を書く。";
 function soloInstruction(ch){
   const style = ch.soloStyle && ch.soloStyle.trim();
   return SOLO_INSTRUCTION + (style ? "\n【独白スタイル（このキャラ専用の指定）】\n"+style : "");
@@ -346,7 +346,7 @@ function soloWrap(inner){
   let state = 0; /* 0=冒頭のタグ待ち 1=独白中 2=本文 */
   let buf = "";
   return {
-    onThinking: inner.onThinking, /* 万一ネイティブ思考が来てもそのまま通す */
+    onThinking: ()=>{}, /* ネイティブ思考(reasoning delta)は擬似モード中は破棄：Gemini等が勝手に思考しても独白と混ぜない。表示経路を完全分離 */
     onText: t=>{
       buf += t;
       while(true){
@@ -379,6 +379,45 @@ function soloWrap(inner){
       buf = "";
     },
   };
+}
+/* 独白タグの寛容マッチ：</monogle> <monolog> 等の誤字・綴りゆれも拾う */
+const SOLO_TAG_LENIENT = /<\s*\/?\s*mono[a-zA-Z]*\s*>/;
+const SOLO_OPEN_LENIENT = /^\s*<\s*mono[a-zA-Z]*\s*>/;
+/* 応答確定前の救済（擬似モード専用）：タグ破損で本文が独白側（またはその逆）に落ちていたら取り戻す。
+   最優先の目的は一つ——contentを空のまま確定させないこと */
+function soloSalvage(am){
+  const th = am.thinking || "";
+  /* ケースA：閉じタグの欠落・誤字で全文が思考側へ落ちた */
+  if((!am.content || !am.content.trim()) && th.trim()){
+    const m = SOLO_TAG_LENIENT.exec(th);
+    if(m){
+      const body = th.slice(m.index + m[0].length).replace(/^\s+/, "");
+      if(body){ am.content = body; am.thinking = th.slice(0, m.index).trimEnd(); return; }
+    }
+    /* 境界が見つからない＝どこまでが独白か不明。本文を失うより全文を本文として返す */
+    am.content = th.trim(); am.thinking = "";
+    return;
+  }
+  /* ケースB：開きタグの誤字で独白ごと本文側へ落ちた */
+  if(am.content){
+    const head = SOLO_OPEN_LENIENT.exec(am.content);
+    if(head){
+      const rest = am.content.slice(head[0].length);
+      const m2 = SOLO_TAG_LENIENT.exec(rest);
+      if(m2){
+        const mono = rest.slice(0, m2.index).trim();
+        const body = rest.slice(m2.index + m2[0].length).replace(/^\s+/, "");
+        if(body){
+          am.content = body;
+          if(mono) am.thinking = (am.thinking ? am.thinking + "\n" : "") + mono;
+        } else {
+          am.content = mono || rest.replace(/^\s+/, ""); /* 本文が無いなら独白を本文として残す */
+        }
+      } else {
+        am.content = rest.replace(/^\s+/, ""); /* 閉じ無し：先頭のタグ文字列だけ除去 */
+      }
+    }
+  }
 }
 /* 新世代Claude（Fable 5 / Opus 4.7・4.8 / Sonnet 5系）はadaptive思考のみ対応。
    旧来のenabled+budget_tokensを送ると400エラーになるため、自動でadaptiveに切り替える */
@@ -995,7 +1034,11 @@ function renderAttach(){
   if(x) x.onclick = ()=>{ pendingAttach=null; renderAttach(); };
 }
 async function runAssistant(c){
-  const ch = charOf(c);
+  /* リクエスト開始時点のキャラ設定をスナップショットで固定：
+     ストリーム中に思考モード等を編集しても、進行中のリクエストの経路は絶対に変わらない */
+  const chLive = charOf(c);
+  const ch = Object.assign({}, chLive);
+  const soloMode = ch.think === "solo"; /* このリクエストのモードはここで確定・以後不変 */
   const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content || "（画像）"}));
   const lastUser = c.messages[c.messages.length-1];
   const img = (sessionImage && sessionImage.msg===lastUser) ? sessionImage.dataUrl : null;
@@ -1018,8 +1061,9 @@ async function runAssistant(c){
     onThinking:t=>{ am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
     onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; think.open = false; stick(); },
   };
-  /* 擬似（内面独白）モードの時だけタグ振り分けを挟む。他モードは素通し＝既存挙動そのまま */
-  const hooks = ch.think==="solo" ? soloWrap(rawHooks) : rawHooks;
+  /* 擬似モードの時だけタグ振り分けを挟む。soloWrapは毎リクエスト新規生成＝パーサ状態とバッファは必ずまっさら。
+     off/low/mid/high/max はrawHooks直結で、パーサを一切通らない（ネイティブ思考の既存挙動そのまま） */
+  const hooks = soloMode ? soloWrap(rawHooks) : rawHooks;
   try{
     const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
     if(hooks.flush) hooks.flush();
@@ -1031,6 +1075,8 @@ async function runAssistant(c){
     else if(err instanceof TypeError) c.messages.push({role:"error", content:"通信に失敗したよ。電波を確認してもう一度送ってみて。"});
     else c.messages.push({role:"error", content:err.message});
   }
+  if(soloMode) soloSalvage(am); /* タグ破損で本文が独白側に落ちていたら取り戻す */
+  if(!am.content && am.thinking) am.content = "（本文が空のまま終わったみたい。出力トークン上限の可能性があるよ。再生成してみてね）"; /* どのモードでも本文を空のまま確定させない */
   if(!am.thinking) delete am.thinking;
   /* 承認制メモリ：候補ブロックを本文から抽出して取り除く */
   if(am.content && am.content.indexOf(MEM_MARK) >= 0){
