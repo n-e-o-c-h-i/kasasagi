@@ -340,11 +340,17 @@ function soloInstruction(ch){
   const style = ch.soloStyle && ch.soloStyle.trim();
   return SOLO_INSTRUCTION + (style ? "\n【独白スタイル（このキャラ専用の指定）】\n"+style : "");
 }
+/* 思考欄の見出し：メッセージ自身の種類（thinkingKind）で決める。無印の既存メッセージは後方互換で「思考プロセス」 */
+function thinkLabel(kind){ return kind==="monologue" ? "内面独白（擬似）" : "思考プロセス"; }
+/* 空白・ゼロ幅文字（ZWSP/ZWNJ/ZWJ/BOM）のマッチ：先頭用と両端trim用 */
+const WS_ZW_LEAD = /^[\s\u200B\u200C\u200D\uFEFF]+/;
+const EDGE_TRIM = /^[\s\u200B\u200C\u200D\uFEFF]+|[\s\u200B\u200C\u200D\uFEFF]+$/g;
 /* ストリーミング中のタグ振り分け：<monologue>内→onThinking、閉じタグ以降→onText。
    タグで始まらなかったら全文を本文扱いにフォールバック（小型モデルの指示無視対策） */
 function soloWrap(inner){
   let state = 0; /* 0=冒頭のタグ待ち 1=独白中 2=本文 */
   let buf = "";
+  let monoLead = true; /* 開きタグ直後：最初の実文字が来るまで空白・改行・ゼロ幅を捨てる */
   return {
     onThinking: ()=>{}, /* ネイティブ思考(reasoning delta)は擬似モード中は破棄：Gemini等が勝手に思考しても独白と混ぜない。表示経路を完全分離 */
     onText: t=>{
@@ -358,6 +364,11 @@ function soloWrap(inner){
           state = 2; buf = lead; continue; /* タグ無し＝全部本文 */
         }
         if(state===1){
+          if(monoLead){
+            buf = buf.replace(WS_ZW_LEAD, "");
+            if(!buf) return; /* まだ空白しか来てない：次のチャンクを待つ */
+            monoLead = false;
+          }
           const i = buf.indexOf(SOLO_CLOSE);
           if(i >= 0){
             if(i > 0) inner.onThinking(buf.slice(0, i));
@@ -540,7 +551,7 @@ function msgHTML(m, i, msgs, ch){
   if(m.role==="error") return '<div class="msg error">'+esc(m.content)+'</div>';
   let inner = '<div class="msg '+m.role+'">';
   if(m.role==="assistant" && m.thinking){
-    inner += '<details class="thinking"><summary>思考プロセス</summary><div class="tbody">'+esc(m.thinking)+'</div></details>';
+    inner += '<details class="thinking"><summary>'+thinkLabel(m.thinkingKind)+'</summary><div class="tbody">'+esc(m.thinking)+'</div></details>';
   }
   if(m.attachments && m.attachments.length){
     m.attachments.forEach(a=>{ if(a.thumb) inner += '<img class="msgimg" src="'+a.thumb+'" alt="'+esc(a.name||"画像")+'">'; });
@@ -1052,13 +1063,13 @@ async function runAssistant(c){
   const bubble = wrap.classList.contains("arow") ? wrap.querySelector(".msg") : wrap;
   const think = document.createElement("details");
   think.className = "thinking"; think.open = true;
-  think.innerHTML = '<summary>思考プロセス</summary><div class="tbody"></div>';
+  think.innerHTML = '<summary>'+thinkLabel(soloMode ? "monologue" : "native")+'</summary><div class="tbody"></div>';
   const tbody = think.querySelector(".tbody");
   const bodySpan = bubble.querySelector(".body");
   const nearBottom = ()=> el.scrollHeight - el.scrollTop - el.clientHeight < 140;
   const stick = ()=>{ if(nearBottom()) el.scrollTop = el.scrollHeight; };
   const rawHooks = {
-    onThinking:t=>{ am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
+    onThinking:t=>{ if(!am.thinkingKind) am.thinkingKind = soloMode ? "monologue" : "native"; am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
     onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; think.open = false; stick(); },
   };
   /* 擬似モードの時だけタグ振り分けを挟む。soloWrapは毎リクエスト新規生成＝パーサ状態とバッファは必ずまっさら。
@@ -1076,8 +1087,12 @@ async function runAssistant(c){
     else c.messages.push({role:"error", content:err.message});
   }
   if(soloMode) soloSalvage(am); /* タグ破損で本文が独白側に落ちていたら取り戻す */
+  /* 仕上げ：thinkingとcontentの先頭・末尾の空白とゼロ幅文字だけを除去（段落間の改行は保持） */
+  if(am.thinking) am.thinking = am.thinking.replace(EDGE_TRIM, "");
+  if(am.content) am.content = am.content.replace(EDGE_TRIM, "");
+  if(am.thinking && !am.thinkingKind) am.thinkingKind = soloMode ? "monologue" : "native"; /* salvage経由で生まれたthinkingにも種類を付与 */
   if(!am.content && am.thinking) am.content = "（本文が空のまま終わったみたい。出力トークン上限の可能性があるよ。再生成してみてね）"; /* どのモードでも本文を空のまま確定させない */
-  if(!am.thinking) delete am.thinking;
+  if(!am.thinking){ delete am.thinking; delete am.thinkingKind; }
   /* 承認制メモリ：候補ブロックを本文から抽出して取り除く */
   if(am.content && am.content.indexOf(MEM_MARK) >= 0){
     const i0 = am.content.indexOf(MEM_MARK);
