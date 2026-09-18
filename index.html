@@ -374,6 +374,19 @@ const THINK_LEVELS = {
 };
 /* ネイティブ思考（ch.think）と擬似内面独白（ch.solo）は独立した2設定。
    メッセージ側も m.thinking（ネイティブ）／m.monologue（独白）／m.content（本文）の3層に分離 */
+/* OpenRouterのGrok 4.5 / 4.6だけ reasoning.effort 方式（OpenRouterのモデルAPIで確認したID：x-ai/grok-4.5, x-ai/grok-4.6。
+   日付付き・バリアント（例 x-ai/grok-4.5-20260708）も同系として扱う）。Grokはreasoningを完全OFFにできないので「なし」でもlowを明示。
+   純関数：思考段階（ch.think）だけを見る。擬似独白（ch.solo）は一切関与しない。それ以外のモデルは従来の max_tokens 方式のまま */
+const GROK_EFFORT_MODELS = /^x-ai\/grok-4\.(5|6)(?:$|[-:])/;
+function reasoningParamFor(model, level){
+  const g = GROK_EFFORT_MODELS.exec(model||"");
+  if(g){
+    const map = {off:"low", low:"low", mid:"medium", high:"high", max: g[1]==="6" ? "xhigh" : "high"};
+    return {effort: map[level] || "low"};
+  }
+  if(level && level!=="off" && THINK_LEVELS[level]) return {max_tokens: THINK_LEVELS[level].budget};
+  return null;
+}
 const LABEL_NATIVE = "思考プロセス";
 const LABEL_MONO = "内面独白（擬似）";
 function migrateThinkFields(c){ /* 旧: think==="solo"（排他選択） → 新: think="off" + solo=true */
@@ -1137,8 +1150,8 @@ async function callOpenRouter(ch, msgs, hooks, img){
     } else apiMsgs.push({role:m.role, content:m.content});
   });
   const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
-  const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
-  if(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]) body.reasoning = {max_tokens: tl.budget}; /* ネイティブ思考は思考モードだけで決まる（独白と独立） */
+  const rp = reasoningParamFor(ch.model, ch.think); /* Grok 4.5/4.6は effort、他は従来の max_tokens。独白設定は無関係 */
+  if(rp) body.reasoning = rp;
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST", signal:aborter.signal,
     headers:{ "content-type":"application/json", "authorization":"Bearer "+settings.openrouterKey },
