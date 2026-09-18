@@ -230,13 +230,15 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold)}
       <option value="mid">🌓 中</option>
       <option value="high">🌕 高</option>
       <option value="max">✨ 最高</option>
-      <option value="solo">💭 擬似（内面独白）</option>
     </select>
-    <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。<br>「💭 擬似」は思考非対応モデル（Gemma等）向け：本物の思考の代わりに、表示用の内面独白を書かせて思考プロセス欄に出すモード。独白ぶんの出力トークンは普通に消費されるよ。</div>
+    <div class="note">Claude系は🌙→✨の順で思考が深く（＝消費も多く）なるよ。OpenRouterのモデルは対応してる場合だけ有効。非対応モデルだとエラーが出るから、その時は「なし」に戻してね。「なし」のときは、モデルが勝手に思考を返してきても表示・保存しない。</div>
+    <label>擬似内面独白</label>
+    <div class="check" style="margin-top:6px"><input type="checkbox" id="cSoloOn"><span>💭 内面独白を書かせて表示する</span></div>
+    <div class="note">思考モードとは独立した設定。返答の前に一人称の独白をタグ付きで書かせて、「内面独白（擬似）」欄に出す。思考モードと両方ONなら「思考プロセス → 内面独白 → 本文」の3層で表示。思考非対応モデル（Gemma等）にも使える。独白ぶんの出力トークンは普通に消費されるよ。</div>
     <div id="soloBox" style="display:none">
       <label>独白スタイル（任意・このキャラ専用）</label>
       <textarea id="cSolo" rows="3" placeholder="例：独白は静かな観察者の口調で。感情より状況分析を優先。／空欄なら標準の指示だけで動くよ"></textarea>
-      <div class="note">擬似モードの時だけ使われる。ここを変えるとキャッシュは作り直しになるけど、固定している間はキャッシュに乗るから毎ターンの損はないよ。思考機能を持つモデル（Gemini等）で擬似を使った場合、モデル本来の思考は表示せず、独白だけを思考欄に出すよ。</div>
+      <div class="note">独白ONの時だけ使われる。ここを変えるとキャッシュは作り直しになるけど、固定している間はキャッシュに乗るから毎ターンの損はないよ。</div>
     </div>
     <label>最大出力トークン</label>
     <input type="number" id="cMaxTokens" value="8192" min="256">
@@ -369,10 +371,30 @@ const THINK_LEVELS = {
   mid:{label:"🌓 中", budget:8192},
   high:{label:"🌕 高", budget:16384},
   max:{label:"✨ 最高", budget:32768},
-  solo:{label:"💭 擬似独白", budget:0}, /* 擬似モード：APIの思考機能は使わない（budgetは未使用） */
 };
-/* 擬似（内面独白）モード：思考非対応モデルに、表示用の独白をタグ付きで書かせる。
-   受信側でタグを解析して思考プロセス欄に振り分ける（soloWrap参照）。
+/* ネイティブ思考（ch.think）と擬似内面独白（ch.solo）は独立した2設定。
+   メッセージ側も m.thinking（ネイティブ）／m.monologue（独白）／m.content（本文）の3層に分離 */
+const LABEL_NATIVE = "思考プロセス";
+const LABEL_MONO = "内面独白（擬似）";
+function migrateThinkFields(c){ /* 旧: think==="solo"（排他選択） → 新: think="off" + solo=true */
+  if(c.think==="solo"){ c.think = "off"; c.solo = true; }
+  if(c.solo!==true) c.solo = false;
+}
+function migrateMessageFields(list){ /* 旧: thinking+thinkingKind==="monologue" → 新: monologue。冪等 */
+  let changed = 0;
+  (list||[]).forEach(cv=>(cv.messages||[]).forEach(m=>{
+    if(m.role!=="assistant") return;
+    if(m.monologue===undefined && m.thinkingKind==="monologue" && m.thinking){ m.monologue = m.thinking; delete m.thinking; changed++; }
+    if(m.thinkingKind!==undefined){ delete m.thinkingKind; changed++; }
+  }));
+  return changed;
+}
+function viewParts(m){ /* 描画用の正規化。移行前データが混ざっていても正しく読む保険 */
+  if(m.monologue!==undefined || m.thinkingKind!=="monologue") return {native:m.thinking||"", mono:m.monologue||""};
+  return {native:"", mono:m.thinking||""};
+}
+/* 擬似内面独白（ch.solo）：表示用の独白をタグ付きで書かせ、受信側でタグを解析して独白欄（m.monologue）へ振り分ける（soloWrap参照）。
+   ネイティブ思考（ch.think）とは完全に独立して同時に使える。
    指示文はキャラ編集時にしか変わらない＝system・ナレッジと同じ変化周期なのでキャッシュ対象に含めてOK */
 const SOLO_OPEN = "<monologue>";
 const SOLO_CLOSE = "</monologue>";
@@ -381,19 +403,17 @@ function soloInstruction(ch){
   const style = ch.soloStyle && ch.soloStyle.trim();
   return SOLO_INSTRUCTION + (style ? "\n【独白スタイル（このキャラ専用の指定）】\n"+style : "");
 }
-/* 思考欄の見出し：メッセージ自身の種類（thinkingKind）で決める。無印の既存メッセージは後方互換で「思考プロセス」 */
-function thinkLabel(kind){ return kind==="monologue" ? "内面独白（擬似）" : "思考プロセス"; }
 /* 空白・ゼロ幅文字（ZWSP/ZWNJ/ZWJ/BOM）のマッチ：先頭用と両端trim用 */
 const WS_ZW_LEAD = /^[\s\u200B\u200C\u200D\uFEFF]+/;
 const EDGE_TRIM = /^[\s\u200B\u200C\u200D\uFEFF]+|[\s\u200B\u200C\u200D\uFEFF]+$/g;
-/* ストリーミング中のタグ振り分け：<monologue>内→onThinking、閉じタグ以降→onText。
+/* ストリーミング中のタグ振り分け：<monologue>内→onMonologue、閉じタグ以降→onText。ネイティブ思考(onThinking)は素通し。
    タグで始まらなかったら全文を本文扱いにフォールバック（小型モデルの指示無視対策） */
 function soloWrap(inner){
   let state = 0; /* 0=冒頭のタグ待ち 1=独白中 2=本文 */
   let buf = "";
   let monoLead = true; /* 開きタグ直後：最初の実文字が来るまで空白・改行・ゼロ幅を捨てる */
   return {
-    onThinking: ()=>{}, /* ネイティブ思考(reasoning delta)は擬似モード中は破棄：Gemini等が勝手に思考しても独白と混ぜない。表示経路を完全分離 */
+    onThinking: t=>inner.onThinking(t), /* ネイティブ思考は独白と別経路（表示するかは思考モード側が決める） */
     onText: t=>{
       buf += t;
       while(true){
@@ -412,12 +432,12 @@ function soloWrap(inner){
           }
           const i = buf.indexOf(SOLO_CLOSE);
           if(i >= 0){
-            if(i > 0) inner.onThinking(buf.slice(0, i));
+            if(i > 0) inner.onMonologue(buf.slice(0, i));
             state = 2; buf = buf.slice(i + SOLO_CLOSE.length).replace(/^\s+/, "");
             continue;
           }
           const keep = SOLO_CLOSE.length - 1; /* 閉じタグがチャンク境界で割れる場合に備えて末尾を保留 */
-          if(buf.length > keep){ inner.onThinking(buf.slice(0, buf.length - keep)); buf = buf.slice(buf.length - keep); }
+          if(buf.length > keep){ inner.onMonologue(buf.slice(0, buf.length - keep)); buf = buf.slice(buf.length - keep); }
           return;
         }
         if(buf){ inner.onText(buf); buf = ""; }
@@ -426,7 +446,7 @@ function soloWrap(inner){
     },
     flush: ()=>{ /* ストリーム終了・中断時：残りを適切な側へ吐き出す */
       if(!buf) return;
-      if(state===1) inner.onThinking(buf);
+      if(state===1) inner.onMonologue(buf);
       else inner.onText(buf.replace(/^\s+/, ""));
       buf = "";
     },
@@ -435,19 +455,19 @@ function soloWrap(inner){
 /* 独白タグの寛容マッチ：</monogle> <monolog> 等の誤字・綴りゆれも拾う */
 const SOLO_TAG_LENIENT = /<\s*\/?\s*mono[a-zA-Z]*\s*>/;
 const SOLO_OPEN_LENIENT = /^\s*<\s*mono[a-zA-Z]*\s*>/;
-/* 応答確定前の救済（擬似モード専用）：タグ破損で本文が独白側（またはその逆）に落ちていたら取り戻す。
+/* 応答確定前の救済（擬似独白ON時専用）：タグ破損で本文が独白側（またはその逆）に落ちていたら取り戻す。m.thinking（ネイティブ）には一切触らない。
    最優先の目的は一つ——contentを空のまま確定させないこと */
 function soloSalvage(am){
-  const th = am.thinking || "";
-  /* ケースA：閉じタグの欠落・誤字で全文が思考側へ落ちた */
+  const th = am.monologue || "";
+  /* ケースA：閉じタグの欠落・誤字で全文が独白側へ落ちた */
   if((!am.content || !am.content.trim()) && th.trim()){
     const m = SOLO_TAG_LENIENT.exec(th);
     if(m){
       const body = th.slice(m.index + m[0].length).replace(/^\s+/, "");
-      if(body){ am.content = body; am.thinking = th.slice(0, m.index).trimEnd(); return; }
+      if(body){ am.content = body; am.monologue = th.slice(0, m.index).trimEnd(); return; }
     }
     /* 境界が見つからない＝どこまでが独白か不明。本文を失うより全文を本文として返す */
-    am.content = th.trim(); am.thinking = "";
+    am.content = th.trim(); am.monologue = "";
     return;
   }
   /* ケースB：開きタグの誤字で独白ごと本文側へ落ちた */
@@ -461,7 +481,7 @@ function soloSalvage(am){
         const body = rest.slice(m2.index + m2[0].length).replace(/^\s+/, "");
         if(body){
           am.content = body;
-          if(mono) am.thinking = (am.thinking ? am.thinking + "\n" : "") + mono;
+          if(mono) am.monologue = (am.monologue ? am.monologue + "\n" : "") + mono;
         } else {
           am.content = mono || rest.replace(/^\s+/, ""); /* 本文が無いなら独白を本文として残す */
         }
@@ -518,8 +538,10 @@ chars.forEach(c=>{
   if(c.memories===undefined) c.memories = [];
   if(c.soloStyle===undefined) c.soloStyle = "";
   migrateDiaryFields(c);
+  migrateThinkFields(c);
 });
 save(LSK.chars, chars); save(LSK.settings, settings);
+if(migrateMessageFields(convos) > 0) save(LSK.convos, convos); /* 旧thinkingKind形式のメッセージを3層形式へ（変更があった時だけ書き戻す） */
 
 const $ = id=>document.getElementById(id);
 const esc = s=>String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -593,8 +615,10 @@ function actsHTML(m, i, msgs){
 function msgHTML(m, i, msgs, ch){
   if(m.role==="error") return '<div class="msg error">'+esc(m.content)+'</div>';
   let inner = '<div class="msg '+m.role+'">';
-  if(m.role==="assistant" && m.thinking){
-    inner += '<details class="thinking"><summary>'+thinkLabel(m.thinkingKind)+'</summary><div class="tbody">'+esc(m.thinking)+'</div></details>';
+  if(m.role==="assistant"){
+    const vp = viewParts(m); /* 思考プロセス → 内面独白（擬似） → 本文 の順で独立表示 */
+    if(vp.native) inner += '<details class="thinking"><summary>'+LABEL_NATIVE+'</summary><div class="tbody">'+esc(vp.native)+'</div></details>';
+    if(vp.mono)   inner += '<details class="thinking"><summary>'+LABEL_MONO+'</summary><div class="tbody">'+esc(vp.mono)+'</div></details>';
   }
   if(m.attachments && m.attachments.length){
     m.attachments.forEach(a=>{ if(a.thumb) inner += '<img class="msgimg" src="'+a.thumb+'" alt="'+esc(a.name||"画像")+'">'; });
@@ -697,7 +721,7 @@ function renderChars(){
     const av = ch.icon ? '<img class="avatar" src="'+ch.icon+'" alt="">' : "";
     return '<div class="card"><div class="row">'+av+
     '<div class="grow" data-start="'+ch.id+'"><div class="t">'+esc(ch.name)+'</div>'+
-    '<div class="s">'+esc(ch.provider)+' · '+esc(ch.model)+(ch.think==="solo"?" · 💭 擬似独白":(ch.think&&ch.think!=="off"?" · 思考"+THINK_LEVELS[ch.think].label:""))+(ch.knowledge?" · ナレッジあり":"")+'</div></div>'+
+    '<div class="s">'+esc(ch.provider)+' · '+esc(ch.model)+(ch.think&&ch.think!=="off"&&THINK_LEVELS[ch.think]?" · 思考"+THINK_LEVELS[ch.think].label:"")+(ch.solo?" · 💭 独白":"")+(ch.knowledge?" · ナレッジあり":"")+'</div></div>'+
     '<button class="hbtn" data-edit="'+ch.id+'">✎</button></div></div>';
   }).join("");
 }
@@ -765,8 +789,8 @@ function editChar(id){
   $("editTitle").textContent = "キャラ編集";
   $("cName").value=ch.name; $("cProvider").value=ch.provider; $("cModel").value=ch.model;
   $("cSystem").value=ch.system; $("cKnowledge").value=ch.knowledge||"";
-  $("cThink").value=ch.think||"off"; $("cMaxTokens").value=ch.maxTokens||8192;
-  $("cSolo").value = ch.soloStyle||""; updateSoloBox();
+  $("cThink").value=(ch.think && THINK_LEVELS[ch.think]) ? ch.think : "off"; $("cMaxTokens").value=ch.maxTokens||8192;
+  $("cSoloOn").checked = !!ch.solo; $("cSolo").value = ch.soloStyle||""; updateSoloBox();
   $("cDiaryMode").value = ch.diaryMode||"off"; $("cDiaryRange").value = ch.diaryRange||"all"; updateDiaryCount();
   editIcon = ch.icon||""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
@@ -777,7 +801,7 @@ function addChar(){
   $("cName").value=""; $("cProvider").value="anthropic"; $("cModel").value="";
   $("cSystem").value=""; $("cKnowledge").value="";
   $("cThink").value="off"; $("cMaxTokens").value=8192;
-  $("cSolo").value = ""; updateSoloBox();
+  $("cSoloOn").checked = false; $("cSolo").value = ""; updateSoloBox();
   $("cDiaryMode").value = "off"; $("cDiaryRange").value = "all"; updateDiaryCount();
   editIcon = ""; showIconPrev(); kCountUpdate(); renderMemList();
   openPanel("panelCharEdit");
@@ -788,6 +812,7 @@ function saveChar(){
     model:$("cModel").value.trim(), system:$("cSystem").value,
     knowledge:$("cKnowledge").value, icon:editIcon,
     think:$("cThink").value,
+    solo:$("cSoloOn").checked,
     soloStyle:$("cSolo").value,
     diaryMode:$("cDiaryMode").value, diaryRange:$("cDiaryRange").value,
     maxTokens:Math.max(256, parseInt($("cMaxTokens").value)||8192),
@@ -844,7 +869,7 @@ function friendlyError(status, raw, ch){
   if(status===401||status===403) return "APIキーが無効か、権限がないみたい。⚙︎ 設定で"+dash+"のキーを確認してね。";
   if(status===404 || /model.*not.*found|not_found/.test(r)) return "モデルID「"+ch.model+"」が見つからないよ。綴りを確認してね。"+(ch.provider==="openrouter"?"OpenRouterのサイトから正確なIDをコピーするのが確実。":"");
   if(/image|vision|multimodal/.test(r) && /support|unsupported|invalid|not.*avail|cannot|unable/.test(r)) return "このモデルは画像添付に対応していません。画像なしで送るか、対応モデル（Claude系・GPT系・Gemini系など）に切り替えてね。";
-  if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」か「💭 擬似（内面独白）」にすると通るよ。擬似なら思考欄に独白を表示できる。";
+  if(/reasoning|thinking/.test(r) && /support|unsupported|invalid|not.*avail/.test(r)) return "このモデルは思考モードに対応してないみたい。キャラ編集で思考モードを「なし」にすると通るよ。独白が欲しければ「擬似内面独白」をONにすれば、思考欄とは別に独白が出る。";
   if(status===402 || /credit|balance|billing|insufficient|quota/.test(r)) return "残高が足りないみたい。"+dash+"のダッシュボードでクレジットを確認してね。";
   if(/prompt is too long|context|too long|maximum.*tokens|exceed/.test(r)) return "会話＋ナレッジが長すぎて上限を超えたみたい。新しい会話を始めるか、ナレッジを短くしてみて。";
   if(status===429) return "レート制限にかかったよ。少し待ってからもう一度ね。";
@@ -1027,7 +1052,7 @@ function systemParts(ch){
   if(ch.knowledge && ch.knowledge.trim()) parts.push("【参考ナレッジ】\n以下はキャラクターと世界観の背景資料。\n\n"+ch.knowledge.trim());
   const diaryEntries = getDiaryEntriesForContext(ch, activeConvo()); /* 参照しない→空配列→何も入らない */
   if(diaryEntries.length) parts.push(diaryBlock(ch, diaryEntries)); /* 独立ブロック。会話履歴には入れない。キャッシュ境界の内側 */
-  if(ch.think==="solo") parts.push(soloInstruction(ch)); /* キャラ編集時にしか変わらない＝キャッシュ対象に含めて損しない */
+  if(ch.solo) parts.push(soloInstruction(ch)); /* 擬似独白ON。キャラ編集時にしか変わらない＝キャッシュ対象に含めて損しない */
   parts.push(MEM_INSTRUCTION); /* 固定文なのでキャッシュに乗る */
   return parts;
 }
@@ -1035,7 +1060,7 @@ function systemParts(ch){
 async function callAnthropic(ch, msgs, hooks, img){
   if(!settings.anthropicKey) throw new Error("AnthropicのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
-  const thinkOn = ch.think && ch.think !== "off" && ch.think !== "solo"; /* 擬似モードはAPIの思考機能を使わない */
+  const thinkOn = !!(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]); /* ネイティブ思考は思考モードだけで決まる（独白と独立） */
   const adaptive = ADAPTIVE_ONLY.test(ch.model);
   const memTxt = memBlock(ch);
   const apiMsgs = msgs.map((m,i)=>{
@@ -1113,7 +1138,7 @@ async function callOpenRouter(ch, msgs, hooks, img){
   });
   const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
   const tl = THINK_LEVELS[ch.think] || THINK_LEVELS.off;
-  if(ch.think && ch.think !== "off" && ch.think !== "solo") body.reasoning = {max_tokens: tl.budget}; /* 擬似モードはreasoning非送信 */
+  if(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]) body.reasoning = {max_tokens: tl.budget}; /* ネイティブ思考は思考モードだけで決まる（独白と独立） */
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST", signal:aborter.signal,
     headers:{ "content-type":"application/json", "authorization":"Bearer "+settings.openrouterKey },
@@ -1250,11 +1275,12 @@ async function runAssistant(c){
      ストリーム中に思考モード等を編集しても、進行中のリクエストの経路は絶対に変わらない */
   const chLive = charOf(c);
   const ch = Object.assign({}, chLive);
-  const soloMode = ch.think === "solo"; /* このリクエストのモードはここで確定・以後不変 */
+  const soloMode = !!ch.solo;                                         /* 擬似独白：このリクエストで確定・以後不変 */
+  const nativeOn = !!(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]); /* ネイティブ思考：OFFなら届いても表示・保存しない */
   const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content || "（画像）"}));
   const lastUser = c.messages[c.messages.length-1];
   const img = (sessionImage && sessionImage.msg===lastUser) ? sessionImage.dataUrl : null;
-  const am = {role:"assistant", content:"", thinking:"", model:ch.model, usage:null};
+  const am = {role:"assistant", content:"", thinking:"", monologue:"", model:ch.model, usage:null};
   c.messages.push(am);
   streaming = true; aborter = new AbortController();
   $("btnSend").textContent = "■"; $("btnSend").classList.add("stop");
@@ -1262,38 +1288,41 @@ async function runAssistant(c){
   const el = $("messages");
   const wrap = el.lastElementChild;
   const bubble = wrap.classList.contains("arow") ? wrap.querySelector(".msg") : wrap;
-  const think = document.createElement("details");
-  think.className = "thinking"; think.open = true;
-  think.innerHTML = '<summary>'+thinkLabel(soloMode ? "monologue" : "native")+'</summary><div class="tbody"></div>';
-  const tbody = think.querySelector(".tbody");
+  /* ライブ表示用の2枠を順序固定で先に置き、最初のデルタが来た枠だけ見せる（思考 → 独白 → 本文） */
+  const mkBox = label=>{ const d = document.createElement("details"); d.className = "thinking"; d.open = true; d.style.display = "none"; d.innerHTML = '<summary>'+label+'</summary><div class="tbody"></div>'; return d; };
+  const thinkEl = mkBox(LABEL_NATIVE), monoEl = mkBox(LABEL_MONO);
+  bubble.prepend(monoEl); bubble.prepend(thinkEl);
+  const tbody = thinkEl.querySelector(".tbody"), mbody = monoEl.querySelector(".tbody");
   const bodySpan = bubble.querySelector(".body");
   const nearBottom = ()=> el.scrollHeight - el.scrollTop - el.clientHeight < 140;
   const stick = ()=>{ if(nearBottom()) el.scrollTop = el.scrollHeight; };
   const rawHooks = {
-    onThinking:t=>{ if(!am.thinkingKind) am.thinkingKind = soloMode ? "monologue" : "native"; am.thinking += t; if(!think.parentNode) bubble.prepend(think); tbody.textContent = am.thinking; stick(); },
-    onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; think.open = false; stick(); },
+    onThinking:t=>{ if(!nativeOn) return; /* 思考OFF＝モデルが勝手に思考しても表示・保存しない */ am.thinking += t; thinkEl.style.display = ""; tbody.textContent = am.thinking; stick(); },
+    onMonologue:t=>{ am.monologue += t; monoEl.style.display = ""; mbody.textContent = am.monologue; stick(); },
+    onText:t=>{ am.content += t; bodySpan.textContent = am.content.split("⟪")[0]; thinkEl.open = false; monoEl.open = false; stick(); },
   };
-  /* 擬似モードの時だけタグ振り分けを挟む。soloWrapは毎リクエスト新規生成＝パーサ状態とバッファは必ずまっさら。
-     off/low/mid/high/max はrawHooks直結で、パーサを一切通らない（ネイティブ思考の既存挙動そのまま） */
+  /* 擬似独白ONの時だけタグ振り分けを挟む。soloWrapは毎リクエスト新規生成＝パーサ状態とバッファは必ずまっさら。
+     OFFならrawHooks直結でパーサを一切通らない。ネイティブ思考はどちらでもonThinkingへ素通し（表示可否はnativeOn） */
   const hooks = soloMode ? soloWrap(rawHooks) : rawHooks;
   try{
     const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
     if(hooks.flush) hooks.flush();
     am.usage = usage;
-    if(!am.content && !am.thinking) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
+    if(!am.content && !am.thinking && !am.monologue) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
   }catch(err){
     if(hooks.flush) hooks.flush(); /* 中断時もバッファ内の文字を捨てない */
     if(err.name==="AbortError"){ if(!am.content) am.content = "（停止したよ）"; }
     else if(err instanceof TypeError) c.messages.push({role:"error", content:"通信に失敗したよ。電波を確認してもう一度送ってみて。"});
     else c.messages.push({role:"error", content:err.message});
   }
-  if(soloMode) soloSalvage(am); /* タグ破損で本文が独白側に落ちていたら取り戻す */
-  /* 仕上げ：thinkingとcontentの先頭・末尾の空白とゼロ幅文字だけを除去（段落間の改行は保持） */
+  if(soloMode) soloSalvage(am); /* タグ破損で本文が独白側に落ちていたら取り戻す（m.thinkingには触らない） */
+  /* 仕上げ：3層それぞれ先頭・末尾の空白とゼロ幅文字だけを除去（段落間の改行は保持） */
   if(am.thinking) am.thinking = am.thinking.replace(EDGE_TRIM, "");
+  if(am.monologue) am.monologue = am.monologue.replace(EDGE_TRIM, "");
   if(am.content) am.content = am.content.replace(EDGE_TRIM, "");
-  if(am.thinking && !am.thinkingKind) am.thinkingKind = soloMode ? "monologue" : "native"; /* salvage経由で生まれたthinkingにも種類を付与 */
-  if(!am.content && am.thinking) am.content = "（本文が空のまま終わったみたい。出力トークン上限の可能性があるよ。再生成してみてね）"; /* どのモードでも本文を空のまま確定させない */
-  if(!am.thinking){ delete am.thinking; delete am.thinkingKind; }
+  if(!am.content && (am.thinking || am.monologue)) am.content = "（本文が空のまま終わったみたい。出力トークン上限の可能性があるよ。再生成してみてね）"; /* どの組み合わせでも本文を空のまま確定させない */
+  if(!am.thinking) delete am.thinking;
+  if(!am.monologue) delete am.monologue;
   /* 承認制メモリ：候補ブロックを本文から抽出して取り除く */
   if(am.content && am.content.indexOf(MEM_MARK) >= 0){
     const i0 = am.content.indexOf(MEM_MARK);
@@ -1363,7 +1392,9 @@ function importData(file){
   if(c.memories===undefined) c.memories = [];
   if(c.soloStyle===undefined) c.soloStyle = "";
   migrateDiaryFields(c);
+  migrateThinkFields(c);
 });
+      migrateMessageFields(convos); /* 古いバックアップの旧形式メッセージも復元時に3層形式へ */
       save(LSK.settings, settings); save(LSK.chars, chars); save(LSK.convos, convos);
       alert("復元したよ！"); location.reload();
     }catch(e){ alert("読み込めなかった…かささぎのバックアップファイルか確認してね。"); }
@@ -1455,8 +1486,8 @@ $("btnClearMem").onclick = ()=>{
   ch.memories = []; save(LSK.chars, chars); renderMemList();
 };
 $("cKnowledge").addEventListener("input", kCountUpdate);
-function updateSoloBox(){ $("soloBox").style.display = $("cThink").value==="solo" ? "" : "none"; }
-$("cThink").addEventListener("change", updateSoloBox);
+function updateSoloBox(){ $("soloBox").style.display = $("cSoloOn").checked ? "" : "none"; }
+$("cSoloOn").addEventListener("change", updateSoloBox);
 /* 日記 */
 $("cDiaryMode").addEventListener("change", updateDiaryCount);
 $("cDiaryRange").addEventListener("change", updateDiaryCount);
