@@ -504,9 +504,15 @@ function soloSalvage(am){
     }
   }
 }
-/* 新世代Claude（Fable 5 / Opus 4.7・4.8 / Sonnet 5系）はadaptive思考のみ対応。
-   旧来のenabled+budget_tokensを送ると400エラーになるため、自動でadaptiveに切り替える */
-const ADAPTIVE_ONLY = /fable|mythos|opus-4-[78]|sonnet-5/;
+/* Anthropic直APIのadaptive思考モデル（Fable 5系 / Mythos / Opus 4.7・4.8 / Sonnet 5 / Opus 5.5）。
+   旧来のenabled+budget_tokensは400エラーになるため、thinking:{type:"adaptive"}＋output_config.effortで送る。
+   Opus 5.5は思考をOFFにできない（thinking:{type:"disabled"}も400）。かささぎの「なし」はthinkingもeffortも送らず、モデル既定に任せる。
+   effort値はAnthropic公式のeffortページで確認（上記モデルはすべて low/medium/high/max に対応）。
+   claude-opus-5（Opus 5.5ではない）は今回の対象外で、従来どおりenabled+budget_tokensを送る。
+   これらのモデルは thinking.display の既定が「省略」で思考の中身が空で返るため、思考ONのときは display:"summarized" を明示して
+   思考の要約を受け取り、思考プロセス欄に表示する（思考OFFでは thinking 自体を送らない） */
+const ADAPTIVE_ONLY = /fable|mythos|opus-4-[78]|opus-5-5(?!\d)|sonnet-5/;
+const ADAPTIVE_EFFORT = {low:"low", mid:"medium", high:"high", max:"max"}; /* ch.think → output_config.effort。off は送らない */
 /* 承認制メモリ：候補の受け渡しに使う記号（本文からは自動で取り除かれる） */
 const MEM_MARK = "⟪MEMORY⟫";
 const MEM_END = "⟪/MEMORY⟫";
@@ -1098,7 +1104,10 @@ async function callAnthropic(ch, msgs, hooks, img){
     body.system = parts.map(t=>({type:"text", text:t}));
     body.system[body.system.length-1].cache_control = cacheCtl();
   }
-  if(thinkOn) body.thinking = adaptive ? {type:"adaptive"} : {type:"enabled", budget_tokens:tl.budget};
+  if(thinkOn){ /* 思考段階（ch.think）だけで決まる。擬似独白（ch.solo）は無関係 */
+    if(adaptive){ body.thinking = {type:"adaptive", display:"summarized"}; body.output_config = {effort: ADAPTIVE_EFFORT[ch.think]}; }
+    else body.thinking = {type:"enabled", budget_tokens:tl.budget};
+  }
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST", signal:aborter.signal,
     headers:{
