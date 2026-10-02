@@ -565,7 +565,8 @@ if(migrateMessageFields(convos) > 0) save(LSK.convos, convos); /* 旧thinkingKin
 const $ = id=>document.getElementById(id);
 const esc = s=>String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const activeConvo = ()=>convos.find(c=>c.id===activeId)||null;
-const charOf = c=>chars.find(x=>x.id===c.charId)||chars[0];
+const charOf = c=>chars.find(x=>x.id===c.charId)||null; /* 見つからない＝削除済みキャラ。別キャラへ自動フォールバックしない（設定・日記の混在防止） */
+const DELETED_CHAR_MSG = "この会話のキャラクターは削除されています。\nこの会話からは送信・再生成・編集・日記への保存はできないよ（過去のやり取りは読めるよ）。\n続けるなら、キャラを選んで新しい会話を始めてね。";
 
 /* ================= theme ================= */
 function lum(hex){
@@ -601,7 +602,7 @@ function fillThemeInputs(){
 /* ================= rendering ================= */
 function renderHeader(){
   const c = activeConvo();
-  $("charName").textContent = c ? charOf(c).name : "";
+  $("charName").textContent = c ? (charOf(c) ? charOf(c).name : "（削除済みキャラ）") : "";
 }
 function metaLine(m){
   let bits=[];
@@ -1050,7 +1051,7 @@ function deleteDiaryFromEditor(){
 function diaryFromMsg(i){
   const c = activeConvo(); if(!c) return;
   const m = c.messages[i]; if(!m || m.role!=="assistant") return;
-  const ch = charOf(c); if(!ch) return;
+  const ch = charOf(c); if(!ch){ alert(DELETED_CHAR_MSG); return; }
   openDiaryEditor(ch.id, {date:todayISO(), title:"", body:stripMemBlock(m.content), source:"assistant_message"});
 }
 function updateDiaryCount(){ /* キャラ編集画面：セレクトの現在値で「送るならどれだけか」を可視化 */
@@ -1187,6 +1188,7 @@ async function send(){
   if(streaming){ if(aborter) aborter.abort(); return; }
   let text = $("input").value.trim();
   if(!text && !pendingAttach) return;
+  { const cur = activeConvo(); if(cur && !charOf(cur)){ alert(DELETED_CHAR_MSG); return; } } /* 入力・添付は消さずに止める */
   const msg = {role:"user", content:text, ts:Date.now()};
   if(pendingAttach){
     if(pendingAttach.kind==="image"){
@@ -1211,6 +1213,7 @@ async function send(){
 async function regenerate(){
   const c = activeConvo();
   if(!c || streaming) return;
+  if(!charOf(c)){ alert(DELETED_CHAR_MSG); return; } /* 履歴を消す前に止める */
   const last = c.messages[c.messages.length-1];
   if(last && last.role==="assistant") c.messages.pop();
   while(c.messages.length && c.messages[c.messages.length-1].role==="error") c.messages.pop();
@@ -1221,6 +1224,7 @@ function editUserMsg(i){
   if(!c || streaming) return;
   const m = c.messages[i];
   if(!m || m.role!=="user") return;
+  if(!charOf(c)){ alert(DELETED_CHAR_MSG); return; } /* 送り直せない会話の履歴は切り詰めない */
   if(!confirm("このメッセージを入力欄に戻すよ。これ以降のやり取りは削除される。いい？")) return;
   $("input").value = m.content;
   $("input").dispatchEvent(new Event("input"));
@@ -1296,6 +1300,7 @@ async function runAssistant(c){
   /* リクエスト開始時点のキャラ設定をスナップショットで固定：
      ストリーム中に思考モード等を編集しても、進行中のリクエストの経路は絶対に変わらない */
   const chLive = charOf(c);
+  if(!chLive){ alert(DELETED_CHAR_MSG); return; } /* 防御：削除済みキャラの会話は送らない */
   const ch = Object.assign({}, chLive);
   const soloMode = !!ch.solo;                                         /* 擬似独白：このリクエストで確定・以後不変 */
   const nativeOn = !!(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]); /* ネイティブ思考：OFFなら届いても表示・保存しない */
@@ -1326,6 +1331,7 @@ async function runAssistant(c){
   /* 擬似独白ONの時だけタグ振り分けを挟む。soloWrapは毎リクエスト新規生成＝パーサ状態とバッファは必ずまっさら。
      OFFならrawHooks直結でパーサを一切通らない。ネイティブ思考はどちらでもonThinkingへ素通し（表示可否はnativeOn） */
   const hooks = soloMode ? soloWrap(rawHooks) : rawHooks;
+  let apiFailed = false; /* Abort以外のエラーで終わったか */
   try{
     const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
     if(hooks.flush) hooks.flush();
@@ -1333,6 +1339,7 @@ async function runAssistant(c){
     if(!am.content && !am.thinking && !am.monologue) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
   }catch(err){
     if(hooks.flush) hooks.flush(); /* 中断時もバッファ内の文字を捨てない */
+    if(err.name!=="AbortError") apiFailed = true;
     if(err.name==="AbortError"){ if(!am.content) am.content = "（停止したよ）"; }
     else if(err instanceof TypeError) c.messages.push({role:"error", content:"通信に失敗したよ。電波を確認してもう一度送ってみて。"});
     else c.messages.push({role:"error", content:err.message});
@@ -1345,6 +1352,9 @@ async function runAssistant(c){
   if(!am.content && (am.thinking || am.monologue)) am.content = "（本文が空のまま終わったみたい。出力トークン上限の可能性があるよ。再生成してみてね）"; /* どの組み合わせでも本文を空のまま確定させない */
   if(!am.thinking) delete am.thinking;
   if(!am.monologue) delete am.monologue;
+  /* エラーで終わり、思考・独白・本文のどれも残っていないassistantは履歴から除く（空のまま残すと次回「（画像）」として送られる）。
+     一部でも受信済みなら残す。AbortErrorは従来どおり（停止したよ） */
+  if(apiFailed && !am.content && !am.thinking && !am.monologue){ const k = c.messages.indexOf(am); if(k >= 0) c.messages.splice(k, 1); }
   /* 承認制メモリ：候補ブロックを本文から抽出して取り除く */
   if(am.content && am.content.indexOf(MEM_MARK) >= 0){
     const i0 = am.content.indexOf(MEM_MARK);
@@ -1360,6 +1370,7 @@ async function runAssistant(c){
       }
     });
     renderMemCards();
+    if(!am.content) am.content = "（本文が空だったよ。メモリの提案だけが届いたみたい。再生成してみてね）"; /* 抽出後も本文を空のまま確定させない */
   }
   am.ts = Date.now();
   streaming = false; aborter = null;
@@ -1379,7 +1390,7 @@ function download(obj, name){
 }
 function exportSafe(){
   download(
-    {kind:"safe", settings:{anthropicKey:"", openrouterKey:"", theme:settings.theme, userIcon:settings.userIcon, sendTime:settings.sendTime}, chars, convos},
+    {kind:"safe", settings:{anthropicKey:"", openrouterKey:"", theme:settings.theme, userIcon:settings.userIcon, sendTime:settings.sendTime, cacheMode:settings.cacheMode}, chars, convos},
     "kasasagi_safe_" + new Date().toISOString().slice(0,10) + ".json"
   );
 }
@@ -1405,6 +1416,7 @@ function importData(file){
         if(d.settings.userIcon!==undefined) settings.userIcon = d.settings.userIcon;
         if(d.settings.sendTime!==undefined) settings.sendTime = d.settings.sendTime;
       }
+      settings.cacheMode = (d.settings && d.settings.cacheMode==="ext") ? "ext" : "std"; /* 旧バックアップ（項目なし）や不正値は既定の"std" */
       chars = d.chars; convos = d.convos;
       chars.forEach(c=>{
   if(c.knowledge===undefined)c.knowledge="";
