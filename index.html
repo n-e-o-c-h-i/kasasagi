@@ -1136,7 +1136,21 @@ async function callAnthropic(ch, msgs, hooks, img){
   return usage;
 }
 
-async function callOpenRouter(ch, msgs, hooks, img){
+/* OpenRouterのsession_id：会話ごとに1つ。OpenRouterのSticky Routing（同じprovider endpointへ戻す）のキーになり、
+   provider側のPrompt Cacheを次のターンでも使いやすくする。最初にOpenRouterへ送るときに作って会話データ（c.sessionId）に保存し、
+   以後は再生成・再読み込み・バックアップ復元でも同じ値を使う。中身はランダムな英数字だけ（APIキー・個人情報・本文は含めない）。
+   公式の上限は256文字。Response Caching（回答の使い回し）とは無関係 */
+function newSessionId(){
+  const a = new Uint8Array(12);
+  if(globalThis.crypto && globalThis.crypto.getRandomValues) globalThis.crypto.getRandomValues(a);
+  else for(let i=0; i<a.length; i++) a[i] = Math.floor(Math.random()*256);
+  return "ksg-" + Array.from(a, b=>b.toString(16).padStart(2,"0")).join("");
+}
+function ensureSessionId(c){ /* 無い・形式外なら作る。あればそのまま */
+  if(typeof c.sessionId!=="string" || !/^[A-Za-z0-9_-]{1,256}$/.test(c.sessionId)) c.sessionId = newSessionId();
+  return c.sessionId;
+}
+async function callOpenRouter(ch, msgs, hooks, img, sessionId){
   if(!settings.openrouterKey) throw new Error("OpenRouterのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const isClaude = /claude|anthropic/i.test(ch.model);
   const memTxt = memBlock(ch);
@@ -1162,6 +1176,7 @@ async function callOpenRouter(ch, msgs, hooks, img){
   const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
   const rp = reasoningParamFor(ch.model, ch.think); /* Grok 4.5/4.6は effort、他は従来の max_tokens。独白設定は無関係 */
   if(rp) body.reasoning = rp;
+  if(sessionId) body.session_id = sessionId; /* Sticky Routingのキー。本文トップレベルで送る（x-session-idヘッダーは使わない） */
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST", signal:aborter.signal,
     headers:{ "content-type":"application/json", "authorization":"Bearer "+settings.openrouterKey },
@@ -1172,7 +1187,8 @@ async function callOpenRouter(ch, msgs, hooks, img){
   await readSSE(resp, ev=>{
     if(ev.usage){
       usage.in = ev.usage.prompt_tokens; usage.out = ev.usage.completion_tokens;
-      if(ev.usage.prompt_tokens_details) usage.cacheRead = ev.usage.prompt_tokens_details.cached_tokens||0;
+      const pd = ev.usage.prompt_tokens_details; /* cached_tokens は prompt_tokens の内数なので、入力に足さない */
+      if(pd){ usage.cacheRead = pd.cached_tokens||0; usage.cacheWrite = pd.cache_write_tokens||0; }
     }
     const d = ev.choices && ev.choices[0] && ev.choices[0].delta;
     if(d){
@@ -1304,6 +1320,8 @@ async function runAssistant(c){
   const ch = Object.assign({}, chLive);
   const soloMode = !!ch.solo;                                         /* 擬似独白：このリクエストで確定・以後不変 */
   const nativeOn = !!(ch.think && ch.think !== "off" && THINK_LEVELS[ch.think]); /* ネイティブ思考：OFFなら届いても表示・保存しない */
+  let sid = null; /* OpenRouterの会話だけ。初めて作ったときはassistantを積む前にすぐ保存する */
+  if(ch.provider==="openrouter"){ const had = c.sessionId; sid = ensureSessionId(c); if(had!==sid) save(LSK.convos, convos); }
   const history = c.messages.filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role, content:m.content || "（画像）"}));
   const lastUser = c.messages[c.messages.length-1];
   const img = (sessionImage && sessionImage.msg===lastUser) ? sessionImage.dataUrl : null;
@@ -1333,7 +1351,7 @@ async function runAssistant(c){
   const hooks = soloMode ? soloWrap(rawHooks) : rawHooks;
   let apiFailed = false; /* Abort以外のエラーで終わったか */
   try{
-    const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img) : await callAnthropic(ch, history, hooks, img);
+    const usage = ch.provider==="openrouter" ? await callOpenRouter(ch, history, hooks, img, sid) : await callAnthropic(ch, history, hooks, img);
     if(hooks.flush) hooks.flush();
     am.usage = usage;
     if(!am.content && !am.thinking && !am.monologue) am.content = "（応答が空だったよ。モデルIDが正しいか確認してみて）";
