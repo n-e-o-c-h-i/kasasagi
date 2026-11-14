@@ -69,6 +69,7 @@ header::after{
 .msg.assistant{margin-right:auto; background:var(--bubbleAI); border-bottom-left-radius:5px}
 .msg.error{margin-right:auto; background:none; border:1px solid var(--error); color:var(--error); font-size:13px}
 .meta{font-size:10.5px; color:var(--dim); margin-top:7px; letter-spacing:.03em}
+.meta.diag{margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); opacity:.8} /* 一時的・診断用 */
 .msgimg{display:block; max-width:150px; max-height:150px; border-radius:9px; margin-bottom:6px; border:1px solid var(--line)}
 .acts{margin-top:7px; display:flex; gap:6px; flex-wrap:wrap}
 .abtn{background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px; font-size:11.5px; padding:3px 10px; font-family:inherit}
@@ -646,6 +647,8 @@ function msgHTML(m, i, msgs, ch){
   inner += '<span class="body">'+esc(m.content)+'</span>';
   const meta = m.role==="assistant" ? metaLine(m) : "";
   if(meta) inner += '<div class="meta">'+meta+'</div>';
+  const diag = m.role==="assistant" ? orDiagLine(m) : ""; /* 【一時的・診断用】reasoning_details の実機確認。保存されず、再読み込みで消える */
+  if(diag) inner += '<div class="meta diag">'+diag+'</div>';
   if(m.role==="user" && settings.theme.showTime && m.ts) inner += '<div class="tstamp">'+fmtTime(m.ts)+'</div>';
   inner += actsHTML(m, i, msgs);
   inner += '</div>';
@@ -1150,6 +1153,73 @@ function ensureSessionId(c){ /* 無い・形式外なら作る。あればその
   if(typeof c.sessionId!=="string" || !/^[A-Za-z0-9_-]{1,256}$/.test(c.sessionId)) c.sessionId = newSessionId();
   return c.sessionId;
 }
+/* ---- OpenRouterのreasoning受信（表示用） ----
+   1つのchunk（delta）から、思考プロセス欄に出す文字を取り出す。
+   ・そのchunkに delta.reasoning（文字列）があれば、それを使う
+   ・無いときだけ delta.reasoning_details を見て、reasoning.text の text と reasoning.summary の summary を届いた順に連結して使う
+   同じchunkに両方が入っている場合は同じ内容なので、片方だけ使えば二重表示にならない（実際のストリームとOpenRouter公式SDKの挙動で確認）。
+   reasoning.encrypted・署名だけの要素・未知のtype・壊れた要素は表示しない。状態を持たないので、リクエスト間の持ち越しが起きない。
+   ここで取り出すのは表示用の文字だけ。reasoning_details そのもの（署名・暗号化データ）は保存もAPIへの再送もしない */
+function orDetailsText(rd){
+  if(!Array.isArray(rd)) return "";
+  let s = "";
+  for(const x of rd){
+    if(!x || typeof x!=="object") continue;
+    if(x.type==="reasoning.text" && typeof x.text==="string") s += x.text;
+    else if(x.type==="reasoning.summary" && typeof x.summary==="string") s += x.summary;
+  }
+  return s;
+}
+function orReasoningText(d){
+  if(typeof d.reasoning==="string" && d.reasoning) return d.reasoning;
+  return orDetailsText(d.reasoning_details);
+}
+/* ---- 【一時的・診断用】reasoning_details の実機確認 ----
+   継続用 reasoning_details の再送（未実装）を作るかどうかを決めるための計測。恒久機能ではない。実測が終わったら残すか消すかを決める。
+   ・数えるだけ。テキスト・署名・暗号化データなどの中身は保持しない
+   ・メモリ上だけ（WeakMap。キーはその応答の usage オブジェクト＝am.usage と同じ参照）。localStorage・バックアップ・会話の複製には出ない。再読み込みで消える
+   ・思考OFFのリクエストでは集計も表示もしない
+   止めるときは OR_DIAG_ON を false にする。消すときの手順は引き継ぎ書 */
+const OR_DIAG_ON = true;
+const OR_DIAG = new WeakMap();
+const OR_ENC = typeof TextEncoder!=="undefined" ? new TextEncoder() : null;
+function orDiagNew(){ return {items:0, bytes:0, types:Object.create(null), sig:0, cont:0, formats:Object.create(null), strChars:0, detChars:0}; }
+function orDiagCount(map, key){ /* APIから来た文字列をキーにするので、長さと種類数を抑える */
+  const k = String(key).slice(0, 40);
+  if(!(k in map) && Object.keys(map).length >= 8){ map["（その他）"] = (map["（その他）"]||0) + 1; return; }
+  map[k] = (map[k]||0) + 1;
+}
+function orDiagAdd(g, d){
+  if(typeof d.reasoning==="string") g.strChars += d.reasoning.length;
+  const rd = d.reasoning_details;
+  if(!Array.isArray(rd)) return;
+  g.detChars += orDetailsText(rd).length;
+  for(const x of rd){
+    const o = x && typeof x==="object" ? x : null;
+    let js = ""; try{ js = JSON.stringify(x) || ""; }catch(e){}
+    g.items++; g.bytes += OR_ENC ? OR_ENC.encode(js).length : js.length;
+    orDiagCount(g.types, o && typeof o.type==="string" ? o.type : "（型なし）");
+    if(o && typeof o.signature==="string" && o.signature) g.sig++;
+    if(o && o.id==="gemini-continuation") g.cont++; /* Gemini 4 の長文継続用ブロック（OpenRouter公式ガイドに載っているid） */
+    if(o && typeof o.format==="string") orDiagCount(g.formats, o.format);
+  }
+}
+function orDiagLine(m){ /* 診断行（エスケープ済み）。出すものが無ければ "" */
+  const g = OR_DIAG_ON && m && m.usage && typeof m.usage==="object" ? OR_DIAG.get(m.usage) : null;
+  if(!g) return "";
+  const list = map=>Object.keys(map).map(k=>k.replace(/^reasoning\./, "")+" "+map[k]).join("／");
+  const bits = [];
+  if(!g.items) bits.push("reasoning_details 届いていない");
+  else{
+    bits.push("reasoning_details "+g.items+"件・"+(g.bytes < 1024 ? g.bytes+"B" : (g.bytes/1024).toFixed(1)+"KB"));
+    bits.push(list(g.types));
+    bits.push("署名つき "+g.sig);
+    if(g.cont) bits.push("継続用 "+g.cont);
+    const f = Object.keys(g.formats); if(f.length) bits.push("形式 "+f.join("／"));
+  }
+  bits.push("文字列 "+g.strChars+"字／details "+g.detChars+"字");
+  return esc("診断｜"+bits.join("｜"));
+}
 async function callOpenRouter(ch, msgs, hooks, img, sessionId){
   if(!settings.openrouterKey) throw new Error("OpenRouterのAPIキーが未設定だよ。⚙︎ 設定から入れてね。");
   const isClaude = /claude|anthropic/i.test(ch.model);
@@ -1184,6 +1254,7 @@ async function callOpenRouter(ch, msgs, hooks, img, sessionId){
   });
   if(!resp.ok) throw await apiError(resp, ch);
   const usage = {};
+  const diag = OR_DIAG_ON && ch.think && ch.think!=="off" && THINK_LEVELS[ch.think] ? orDiagNew() : null; /* 【一時的・診断用】思考OFFでは集計しない */
   await readSSE(resp, ev=>{
     if(ev.usage){
       usage.in = ev.usage.prompt_tokens; usage.out = ev.usage.completion_tokens;
@@ -1192,10 +1263,13 @@ async function callOpenRouter(ch, msgs, hooks, img, sessionId){
     }
     const d = ev.choices && ev.choices[0] && ev.choices[0].delta;
     if(d){
-      if(d.reasoning) hooks.onThinking(d.reasoning);
+      if(diag){ try{ orDiagAdd(diag, d); }catch(e){} } /* 診断の集計が受信を止めることはない */
+      const r = orReasoningText(d); /* 文字列優先。無ければ reasoning_details の表示できるテキスト。表示するかどうかは onThinking 側（思考OFFなら捨てる） */
+      if(r) hooks.onThinking(r);
       if(d.content) hooks.onText(d.content);
     }
   });
+  if(diag) OR_DIAG.set(usage, diag);
   return usage;
 }
 
