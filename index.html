@@ -365,7 +365,8 @@ const LSK = { settings:"ksg_settings", chars:"ksg_chars", convos:"ksg_convos", a
 const CHAR_BTN_ICON = "💫";
 /* ★ 入力欄のプレースホルダー文言：ここを書き換えるだけで変更できるよ（候補：橋にことばを架ける… / 星まで届ける…） */
 const INPUT_PLACEHOLDER = "ことばを渡す…";
-/* 思考モードの段階定義：Anthropicはbudget_tokens、OpenRouterはreasoning.max_tokensとして使う */
+/* 思考モードの段階定義：Anthropicはbudget_tokens、OpenRouterはreasoning.max_tokensとして使う
+   （OpenRouterのGrok 4.5 / 4.6 と Gemini 4 Argon / Carbon は budget を使わず reasoning.effort を送る → reasoningParamFor） */
 const THINK_LEVELS = {
   off:{label:"なし", budget:0},
   low:{label:"🌙 低", budget:2048},
@@ -375,14 +376,29 @@ const THINK_LEVELS = {
 };
 /* ネイティブ思考（ch.think）と擬似内面独白（ch.solo）は独立した2設定。
    メッセージ側も m.thinking（ネイティブ）／m.monologue（独白）／m.content（本文）の3層に分離 */
-/* OpenRouterのGrok 4.5 / 4.6だけ reasoning.effort 方式（OpenRouterのモデルAPIで確認したID：x-ai/grok-4.5, x-ai/grok-4.6。
+/* OpenRouterのGrok 4.5 / 4.6 は reasoning.effort 方式（OpenRouterのモデルAPIで確認したID：x-ai/grok-4.5, x-ai/grok-4.6。
    日付付き・バリアント（例 x-ai/grok-4.5-20260708）も同系として扱う）。Grokはreasoningを完全OFFにできないので「なし」でもlowを明示。
-   純関数：思考段階（ch.think）だけを見る。擬似独白（ch.solo）は一切関与しない。それ以外のモデルは従来の max_tokens 方式のまま */
+   純関数：思考段階（ch.think）だけを見る。擬似独白（ch.solo）は一切関与しない。
+   effort方式の対象（Grok 4.5 / 4.6 と、下の Gemini 4 Argon / Carbon）以外のモデルは従来の max_tokens 方式のまま */
 const GROK_EFFORT_MODELS = /^x-ai\/grok-4\.(5|6)(?:$|[-:])/;
+/* OpenRouterのGemini 4 Argon / Carbon も reasoning.effort 方式。どちらも公式に対応しているのは low / medium / high の3段階だけで、
+   予算指定（reasoning.max_tokens）は非対応（Google側では予算指定も minimal も400エラー。Argon・Carbonそれぞれの公式資料で確認）。
+   ・「最高」は high を送る。存在しない xhigh / max は送らない（xhigh があるのは別モデルの Hydrogen で、ここの対象外）
+   ・推論を止める手段が無いので、Grokと同じく「なし」でも low を明示する（何も送らないと、Google公式の既定である medium になると考えられる。
+     OpenRouter側の既定は未確認）。
+     表示・保存しないのは runAssistant の nativeOn 側の仕事で、ここは送る値だけを決める
+   対象ID：google/gemini-4-argon, google/gemini-4-carbon。日付付きの正規ID（例 google/gemini-4-carbon-20261110）と
+   バリアント（:nitro など）も同系として扱う。名前が途中まで同じ別モデルや「~」で始まる latest 別名は対象にしない。
+   2つの仕様が同じなので1つにまとめてある。将来どちらかの段階が変わったら、exec で取り出したモデル名（argon / carbon）で分ける */
+const GEMINI4_EFFORT_MODELS = /^google\/gemini-4-(argon|carbon)(?:$|[-:])/;
 function reasoningParamFor(model, level){
   const g = GROK_EFFORT_MODELS.exec(model||"");
   if(g){
     const map = {off:"low", low:"low", mid:"medium", high:"high", max: g[1]==="6" ? "xhigh" : "high"};
+    return {effort: map[level] || "low"};
+  }
+  if(GEMINI4_EFFORT_MODELS.test(model||"")){
+    const map = {off:"low", low:"low", mid:"medium", high:"high", max:"high"};
     return {effort: map[level] || "low"};
   }
   if(level && level!=="off" && THINK_LEVELS[level]) return {max_tokens: THINK_LEVELS[level].budget};
@@ -1244,7 +1260,7 @@ async function callOpenRouter(ch, msgs, hooks, img, sessionId){
     } else apiMsgs.push({role:m.role, content:m.content});
   });
   const body = { model: ch.model, messages: apiMsgs, stream: true, max_tokens: ch.maxTokens, usage:{include:true} };
-  const rp = reasoningParamFor(ch.model, ch.think); /* Grok 4.5/4.6は effort、他は従来の max_tokens。独白設定は無関係 */
+  const rp = reasoningParamFor(ch.model, ch.think); /* Grok 4.5/4.6 と Gemini 4 Argon/Carbon は effort、他は従来の max_tokens。独白設定は無関係 */
   if(rp) body.reasoning = rp;
   if(sessionId) body.session_id = sessionId; /* Sticky Routingのキー。本文トップレベルで送る（x-session-idヘッダーは使わない） */
   const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
