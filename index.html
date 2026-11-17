@@ -69,7 +69,7 @@ header::after{
 .msg.assistant{margin-right:auto; background:var(--bubbleAI); border-bottom-left-radius:5px}
 .msg.error{margin-right:auto; background:none; border:1px solid var(--error); color:var(--error); font-size:13px}
 .meta{font-size:10.5px; color:var(--dim); margin-top:7px; letter-spacing:.03em}
-.meta.diag{margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); opacity:.8} /* 一時的・診断用 */
+.meta.diag{margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); opacity:.8} /* 開発用の診断行（通常は出ない） */
 .msgimg{display:block; max-width:150px; max-height:150px; border-radius:9px; margin-bottom:6px; border:1px solid var(--line)}
 .acts{margin-top:7px; display:flex; gap:6px; flex-wrap:wrap}
 .abtn{background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px; font-size:11.5px; padding:3px 10px; font-family:inherit}
@@ -663,7 +663,7 @@ function msgHTML(m, i, msgs, ch){
   inner += '<span class="body">'+esc(m.content)+'</span>';
   const meta = m.role==="assistant" ? metaLine(m) : "";
   if(meta) inner += '<div class="meta">'+meta+'</div>';
-  const diag = m.role==="assistant" ? orDiagLine(m) : ""; /* 【一時的・診断用】reasoning_details の実機確認。保存されず、再読み込みで消える */
+  const diag = m.role==="assistant" ? orDiagLine(m) : ""; /* 【開発用・通常は出ない】reasoning_details の診断行（OR_DIAG_ON）。保存されず、再読み込みで消える */
   if(diag) inner += '<div class="meta diag">'+diag+'</div>';
   if(m.role==="user" && settings.theme.showTime && m.ts) inner += '<div class="tstamp">'+fmtTime(m.ts)+'</div>';
   inner += actsHTML(m, i, msgs);
@@ -1190,13 +1190,14 @@ function orReasoningText(d){
   if(typeof d.reasoning==="string" && d.reasoning) return d.reasoning;
   return orDetailsText(d.reasoning_details);
 }
-/* ---- 【一時的・診断用】reasoning_details の実機確認 ----
-   継続用 reasoning_details の再送（未実装）を作るかどうかを決めるための計測。恒久機能ではない。実測が終わったら残すか消すかを決める。
+/* ---- 【開発用・通常は出ない】reasoning_details の診断行 ----
+   OpenRouterの reasoning まわりを実機で調べるための計測。2026-11-16 の実機確認で目的を果たしたので、通常表示は終了した（OR_DIAG_ON = false）。
+   もう一度調べるときは OR_DIAG_ON を true にする（メタ行の下に「診断｜…」が出る）。調べ終わったら false に戻す。手順は引き継ぎ書
+   ・false のあいだは、集計も表示もしない
    ・数えるだけ。テキスト・署名・暗号化データなどの中身は保持しない
    ・メモリ上だけ（WeakMap。キーはその応答の usage オブジェクト＝am.usage と同じ参照）。localStorage・バックアップ・会話の複製には出ない。再読み込みで消える
-   ・思考OFFのリクエストでは集計も表示もしない
-   止めるときは OR_DIAG_ON を false にする。消すときの手順は引き継ぎ書 */
-const OR_DIAG_ON = true;
+   ・true にしても、思考OFFのリクエストでは集計も表示もしない */
+const OR_DIAG_ON = false;
 const OR_DIAG = new WeakMap();
 const OR_ENC = typeof TextEncoder!=="undefined" ? new TextEncoder() : null;
 function orDiagNew(){ return {items:0, bytes:0, types:Object.create(null), sig:0, cont:0, formats:Object.create(null), strChars:0, detChars:0}; }
@@ -1270,7 +1271,7 @@ async function callOpenRouter(ch, msgs, hooks, img, sessionId){
   });
   if(!resp.ok) throw await apiError(resp, ch);
   const usage = {};
-  const diag = OR_DIAG_ON && ch.think && ch.think!=="off" && THINK_LEVELS[ch.think] ? orDiagNew() : null; /* 【一時的・診断用】思考OFFでは集計しない */
+  const diag = OR_DIAG_ON && ch.think && ch.think!=="off" && THINK_LEVELS[ch.think] ? orDiagNew() : null; /* 【開発用】OR_DIAG_ON が false なら集計しない。true でも思考OFFでは集計しない */
   await readSSE(resp, ev=>{
     if(ev.usage){
       usage.in = ev.usage.prompt_tokens; usage.out = ev.usage.completion_tokens;
